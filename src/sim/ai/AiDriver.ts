@@ -64,7 +64,10 @@ export function aiInput(
   const desiredYaw = Math.atan2(target.x - self.x, target.z - self.z);
   const turn = angleDiff(desiredYaw, self.yaw);
 
-  let steer = clamp(turn * diff.steerGain, -1, 1);
+  // steer +1 turns right (yaw decreases), so steering toward a higher desired
+  // yaw needs a negative steer — hence the minus (keeps AI consistent with the
+  // human steering convention in DriftModel).
+  let steer = clamp(-turn * diff.steerGain, -1, 1);
 
   // Rubber-band: trailing cars get full throttle, the leader eases off.
   let throttle = lerp(diff.baseThrottle, 1, ctx.rankFactor);
@@ -85,7 +88,8 @@ export function aiInput(
     const side = rx * cos - rz * sin;
     const dist = Math.hypot(rx, rz);
     if (forward > 0 && dist < diff.avoidDist && Math.abs(side) < 1.5) {
-      steer = clamp(steer + (side >= 0 ? -0.6 : 0.6), -1, 1);
+      // Obstacle on our +X side (side>0) → steer toward -X (steer +1 = right).
+      steer = clamp(steer + (side >= 0 ? 0.6 : -0.6), -1, 1);
       throttle *= 0.7;
     }
   }

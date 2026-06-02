@@ -99,8 +99,10 @@ export function driftStep({
   );
   const authority = clamp(Math.abs(vForward) / stats.turnFullSpeed, 0, 1);
   const dir = vForward >= 0 ? 1 : -1;
+  // steer +1 = turn RIGHT. With forward=+Z in a right-handed +Y-up world,
+  // the player's right is world -X, which is a DECREASING yaw — hence the minus.
   const newYaw =
-    yaw +
+    yaw -
     input.steer * stats.steerRate * speedFactor * authority * dir * ctrl * dt;
 
   // --- Recompose against the NEW heading -----------------------------------

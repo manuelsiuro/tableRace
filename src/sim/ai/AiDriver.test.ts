@@ -26,25 +26,25 @@ describe("aiInput pure pursuit", () => {
     expect(out.throttle).toBeGreaterThan(0.5);
   });
 
-  it("steers right toward a target that is to the right", () => {
-    // Path bends to +X ahead.
+  it("turns toward a target bending world +X (negative steer)", () => {
+    // steer +1 = right = world -X, so heading toward +X needs negative steer.
     const bend: Vec3[] = [
       { x: 0, y: 0, z: 0 },
       { x: 30, y: 0, z: 10 },
       { x: 30, y: 0, z: 60 },
     ];
     const out = aiInput(ctx({ waypoints: bend }));
-    expect(out.steer).toBeGreaterThan(0);
+    expect(out.steer).toBeLessThan(0);
   });
 
-  it("steers left toward a target that is to the left", () => {
+  it("turns toward a target bending world -X (positive steer)", () => {
     const bend: Vec3[] = [
       { x: 0, y: 0, z: 0 },
       { x: -30, y: 0, z: 10 },
       { x: -30, y: 0, z: 60 },
     ];
     const out = aiInput(ctx({ waypoints: bend }));
-    expect(out.steer).toBeLessThan(0);
+    expect(out.steer).toBeGreaterThan(0);
   });
 
   it("gives full throttle straight when in last place (rubber-band)", () => {

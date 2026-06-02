@@ -62,15 +62,16 @@ describe("DriftModel steering", () => {
   });
 
   it("high grip realigns travel toward the new heading", () => {
-    // Moving straight +Z, steer right for several steps; velocity should rotate
-    // to follow the heading (vx grows), not keep pointing pure +Z.
+    // Moving straight +Z, steer right for several steps. steer +1 = right turns
+    // toward world -X (yaw decreases), and grip realigns travel to follow — so
+    // yaw and vx both go negative, not stay pure +Z.
     let s = { vx: 0, vz: 15, yaw: 0 };
     for (let i = 0; i < 10; i++) {
       const out = step({ ...s, input: { throttle: 1, steer: 0.3 } });
       s = { vx: out.vx, vz: out.vz, yaw: out.yaw };
     }
-    expect(s.yaw).toBeGreaterThan(0);
-    expect(s.vx).toBeGreaterThan(0.5);
+    expect(s.yaw).toBeLessThan(0);
+    expect(s.vx).toBeLessThan(-0.5);
   });
 });
 
