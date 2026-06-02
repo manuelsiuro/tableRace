@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n vite,host \"vite\" \"tsx watch server/index.ts\"",
+    "dev:client": "vite",
+    "host": "tsx server/index.ts",
+    "start": "tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -24,6 +27,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/node": "^25.9.1",
+    "@types/qrcode": "^1.5.6",
     "@types/three": "^0.171.0",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^3.2.4",

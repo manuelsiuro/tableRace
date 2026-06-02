@@ -18,6 +18,8 @@ import type { RaceMode } from "../sim/rules/RaceMode";
 import { WorldRenderer, type CameraMode } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
 import { Hud } from "../ui/Hud";
+import { SessionClient } from "../net/SessionClient";
+import type { LobbyState } from "../shared/protocol";
 import { GameLoop } from "./GameLoop";
 import type { RaceModeId, Snapshot } from "../shared/snapshot";
 
@@ -51,6 +53,10 @@ export class Game {
   private lastSnap: Snapshot | null = null;
   private overlays: HTMLElement[] = [];
   private timers: number[] = [];
+
+  // Multiplayer (LAN) client; null in single-player.
+  private net: SessionClient | null = null;
+  private netReady = false;
 
   constructor(mount: HTMLElement) {
     this.mount = mount;
@@ -104,12 +110,16 @@ export class Game {
   }
 
   private renderMainMenu(): void {
+    this.teardownMultiplayer();
     this.resetMount();
     const screen = this.screen("TableRace");
     screen.appendChild(this.note("choose a mode"));
     for (const m of MODE_LABELS) {
       screen.appendChild(this.button(m.label, () => this.chooseMode(m.id)));
     }
+    screen.appendChild(
+      this.button("Multiplayer (LAN)", () => this.startMultiplayer()),
+    );
     this.mount.appendChild(screen);
   }
 
@@ -250,6 +260,76 @@ export class Game {
       case "freedrive":
         return { mode: null, cars: [player], powerups: false };
     }
+  }
+
+  // ---- Multiplayer (LAN) --------------------------------------------------
+
+  private startMultiplayer(): void {
+    this.teardownSession();
+    if (!this.hud) return;
+    this.netReady = false;
+    this.net = new SessionClient(this.mount, this.hud, {
+      onWelcome: () => this.renderNetStatus("connected — pick a car"),
+      onLobby: (state, youId) => this.renderNetLobby(state, youId),
+      onStart: () => this.clearOverlays(),
+      onMatchEnd: (winner) => this.renderNetResults(winner),
+      onRejected: (reason) => this.renderNetStatus(`rejected: ${reason}`),
+      onClose: () => this.renderNetStatus("disconnected"),
+    });
+    this.renderNetStatus("connecting to host…");
+  }
+
+  private renderNetStatus(text: string): void {
+    this.resetMount();
+    const screen = this.screen("Multiplayer");
+    screen.appendChild(this.note(text));
+    screen.appendChild(this.button("← Leave", () => this.leaveMultiplayer()));
+    this.mount.appendChild(screen);
+  }
+
+  private renderNetLobby(state: LobbyState, youId: number): void {
+    this.resetMount();
+    const screen = this.screen("LAN Lobby");
+    const me = state.players.find((p) => p.playerId === youId);
+    screen.appendChild(
+      this.note(`players: ${state.players.length}/4 · you are P${youId + 1}`),
+    );
+
+    for (const c of CARS) {
+      const picked = me?.carId === c.id ? " ✓" : "";
+      screen.appendChild(
+        this.button(`${c.name}${picked}`, () => this.net?.selectCar(c.id)),
+      );
+    }
+    screen.appendChild(
+      this.button(this.netReady ? "Unready" : "Ready", () => {
+        this.netReady = !this.netReady;
+        this.net?.setReady(this.netReady);
+      }),
+    );
+    screen.appendChild(this.button("← Leave", () => this.leaveMultiplayer()));
+    this.mount.appendChild(screen);
+  }
+
+  private renderNetResults(winner: number): void {
+    const screen = this.overlayScreen();
+    const title = document.createElement("h1");
+    title.textContent =
+      winner === 0 ? "Race over" : `Winner: Car ${winner + 1}`;
+    screen.appendChild(title);
+    screen.appendChild(this.button("Main menu", () => this.leaveMultiplayer()));
+    this.mount.appendChild(screen);
+    this.overlays.push(screen);
+  }
+
+  private leaveMultiplayer(): void {
+    this.renderMainMenu(); // also tears down the multiplayer session
+  }
+
+  private teardownMultiplayer(): void {
+    this.net?.dispose();
+    this.net = null;
+    this.netReady = false;
   }
 
   private runCountdown(): void {

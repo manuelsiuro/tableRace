@@ -88,6 +88,12 @@ export class Simulation {
         : null;
   }
 
+  /** Hand a car between AI and external control at runtime (drop→bot / rejoin). */
+  setCarAi(id: number, enabled: boolean, difficulty?: AiDifficulty): void {
+    if (id < 0 || id >= this.cars.length) return;
+    this.aiDrivers[id] = enabled ? new AiDriver(difficulty) : null;
+  }
+
   private carViews(): AiView[] {
     return this.cars.map((c) => {
       const t = c.body.translation();

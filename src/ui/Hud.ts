@@ -65,47 +65,49 @@ export class Hud {
     this.sub.position.set(w / 2, 44);
   }
 
-  update(snap: Snapshot): void {
+  /** `youId` is the local player's car id (0 in single-player). */
+  update(snap: Snapshot, youId = 0): void {
     if (!this.top) return;
     const race = snap.race;
     const aliveCount = snap.cars.filter((c) => c.alive).length;
-    const item = snap.cars[0]?.item;
-    this.top.text = this.topLine(race, snap.cars.length, aliveCount);
+    const item = snap.cars[youId]?.item;
+    this.top.text = this.topLine(race, youId, snap.cars.length, aliveCount);
     this.sub.text = item
       ? `ITEM: ${item.toUpperCase()}  ·  press E`
-      : this.subLine(race);
+      : this.subLine(race, youId);
   }
 
   private topLine(
     race: RaceSnapshot,
+    you: number,
     carCount: number,
     aliveCount: number,
   ): string {
     if (race.phase === "finished") {
-      return race.leaderId === 0
+      return race.leaderId === you
         ? "🏆  YOU WIN"
         : `WINNER: CAR ${race.leaderId + 1}`;
     }
     switch (race.mode) {
       case "elimination":
-        return `ROUND ${race.round + 1}  ·  PTS ${race.scores[0] ?? 0}  ·  ${aliveCount} RACING`;
+        return `ROUND ${race.round + 1}  ·  PTS ${race.scores[you] ?? 0}  ·  ${aliveCount} RACING`;
       case "circuit": {
-        const lap = (race.laps?.[0] ?? 0) + 1;
-        const pos = race.positions?.[0] ?? 1;
+        const lap = (race.laps?.[you] ?? 0) + 1;
+        const pos = race.positions?.[you] ?? 1;
         return `LAP ${Math.min(lap, race.totalLaps ?? lap)}/${race.totalLaps ?? "?"}  ·  P${pos}/${carCount}`;
       }
       case "timetrial": {
-        const lap = (race.laps?.[0] ?? 0) + 1;
-        return `LAP ${Math.min(lap, race.totalLaps ?? lap)}/${race.totalLaps ?? "?"}  ·  ${fmtTime(race.lapMs?.[0] ?? 0)}`;
+        const lap = (race.laps?.[you] ?? 0) + 1;
+        return `LAP ${Math.min(lap, race.totalLaps ?? lap)}/${race.totalLaps ?? "?"}  ·  ${fmtTime(race.lapMs?.[you] ?? 0)}`;
       }
       case "battle":
-        return `LIVES ${race.lives?.[0] ?? 0}  ·  ${aliveCount} LEFT`;
+        return `LIVES ${race.lives?.[you] ?? 0}  ·  ${aliveCount} LEFT`;
     }
   }
 
-  private subLine(race: RaceSnapshot): string {
+  private subLine(race: RaceSnapshot, you: number): string {
     if (race.mode === "timetrial")
-      return `BEST ${fmtTime(race.bestLapMs?.[0] ?? 0)}`;
+      return `BEST ${fmtTime(race.bestLapMs?.[you] ?? 0)}`;
     if (race.phase === "roundEnd") return "round over";
     return "";
   }
