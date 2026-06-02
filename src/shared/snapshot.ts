@@ -27,6 +27,7 @@ export interface CarSnapshot {
   shield?: boolean;
   boosting?: boolean;
   stunned?: boolean;
+  drifting?: boolean;
 }
 
 /** A live missile / dropped mine / oil patch — `kind` selects which. */

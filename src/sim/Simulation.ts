@@ -285,6 +285,7 @@ export class Simulation {
         shield: this.powerups?.hasShield(i) || undefined,
         boosting: this.powerups?.isBoosting(i) || undefined,
         stunned: this.powerups?.isStunned(i) || undefined,
+        drifting: car.drifting || undefined,
       };
     });
 

@@ -19,6 +19,7 @@ import { WorldRenderer, type CameraMode } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
 import { Hud } from "../ui/Hud";
 import { SessionClient } from "../net/SessionClient";
+import { createSaveStore } from "../save/SaveStore";
 import type { LobbyState } from "../shared/protocol";
 import { GameLoop } from "./GameLoop";
 import type { RaceModeId, Snapshot } from "../shared/snapshot";
@@ -58,6 +59,9 @@ export class Game {
   private net: SessionClient | null = null;
   private netReady = false;
 
+  private readonly save = createSaveStore();
+  private lastTrackId = "arena";
+
   constructor(mount: HTMLElement) {
     this.mount = mount;
     this.fsm.onChange((to) => this.onState(to));
@@ -65,6 +69,7 @@ export class Game {
 
   async start(): Promise<void> {
     this.renderLoading();
+    this.selectedCar = this.save.lastCarId;
     this.rapier = await initRapier();
     this.hud = new Hud();
     await this.hud.init();
@@ -166,8 +171,15 @@ export class Game {
         return `your points: ${r.scores[0] ?? 0}`;
       case "circuit":
         return `you finished P${r.positions?.[0] ?? "?"} of ${snap.cars.length}`;
-      case "timetrial":
-        return `best lap: ${((r.bestLapMs?.[0] ?? 0) / 1000).toFixed(2)}s`;
+      case "timetrial": {
+        const ms = r.bestLapMs?.[0] ?? 0;
+        const isNew = this.save.recordLap(this.lastTrackId, ms);
+        const best = this.save.bestLap(this.lastTrackId);
+        const lap = (ms / 1000).toFixed(2);
+        return isNew
+          ? `best lap: ${lap}s — NEW RECORD!`
+          : `your lap: ${lap}s · record: ${(best / 1000).toFixed(2)}s`;
+      }
       case "battle":
         return r.leaderId === 0 ? "last car standing!" : "you were knocked out";
     }
@@ -182,6 +194,7 @@ export class Game {
 
   private chooseCar(id: string): void {
     this.selectedCar = id;
+    this.save.lastCarId = id;
     this.fsm.transition("countdown");
   }
 
@@ -190,6 +203,7 @@ export class Game {
     this.resetMount();
 
     const track = createProceduralTrack();
+    this.lastTrackId = track.id;
     const { mode, cars, powerups } = this.buildRace(track.checkpoints);
     const cameraMode: CameraMode =
       this.selectedMode === "freedrive" ? "follow" : "shared";

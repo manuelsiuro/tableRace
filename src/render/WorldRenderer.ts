@@ -75,14 +75,32 @@ export class WorldRenderer {
   private readonly sharedOffset = new Vector3(0, 60, -28);
   private readonly sharedFocus = new Vector3();
   private cameraInitialized = false;
+  // Camera shake (impulse decays each frame); added to the camera position.
+  private shake = 0;
+  private prevAlive = -1;
+  // Skid marks left by drifting cars — a bounded ring of dark quads.
+  private readonly skidGeometry = new PlaneGeometry(0.7, 0.7);
+  private readonly skidMaterial = new MeshStandardMaterial({
+    color: 0x111111,
+    transparent: true,
+    opacity: 0.5,
+  });
+  private readonly skids: Mesh[] = [];
+  private skidNext = 0;
+  private static readonly MAX_SKIDS = 240;
   private readonly onResize = () => this.resize();
 
   constructor(parent: HTMLElement, opts: { cameraMode?: CameraMode } = {}) {
     this.parent = parent;
     this.cameraMode = opts.cameraMode ?? "follow";
 
-    this.renderer = new WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Mobile/low-power devices: skip MSAA and cap the pixel ratio at 1.
+    const mobile =
+      typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+    this.renderer = new WebGLRenderer({ antialias: !mobile });
+    this.renderer.setPixelRatio(
+      mobile ? 1 : Math.min(window.devicePixelRatio, 2),
+    );
     parent.appendChild(this.renderer.domElement);
 
     this.camera = new PerspectiveCamera(55, 1, 0.1, 400);
@@ -133,7 +151,15 @@ export class WorldRenderer {
       mat.emissive.setHex(
         car.boosting ? 0x884400 : car.stunned ? 0x444444 : 0x000000,
       );
+      if (car.alive && car.drifting)
+        this.laySkidMark(t.position.x, t.position.z);
     }
+
+    // Camera shake when a car is eliminated (alive count drops).
+    const alive = cur.cars.filter((c) => c.alive).length;
+    if (this.prevAlive >= 0 && alive < this.prevAlive) this.shake = 0.6;
+    this.prevAlive = alive;
+    this.shake *= 0.9;
 
     this.spinPhase += 0.05;
     this.updatePickups(cur);
@@ -146,6 +172,19 @@ export class WorldRenderer {
       this.updateCamera(prev, cur, alpha);
       this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  /** Drop a fading skid quad under a drifting car (bounded ring buffer). */
+  private laySkidMark(x: number, z: number): void {
+    let mark = this.skids[this.skidNext];
+    if (!mark) {
+      mark = new Mesh(this.skidGeometry, this.skidMaterial);
+      mark.rotation.x = -Math.PI / 2;
+      this.scene.add(mark);
+      this.skids[this.skidNext] = mark;
+    }
+    mark.position.set(x, 0.03, z);
+    this.skidNext = (this.skidNext + 1) % WorldRenderer.MAX_SKIDS;
   }
 
   /** Reconcile floating pickup boxes against the snapshot (stable ids). */
@@ -297,6 +336,12 @@ export class WorldRenderer {
 
     this.sharedFocus.set(x, 0, z);
     this.orthoCamera.position.copy(this.sharedFocus).add(this.sharedOffset);
+    // Camera shake: deterministic jitter scaled by the decaying impulse.
+    if (this.shake > 0.01) {
+      const s = this.shake;
+      this.orthoCamera.position.x += Math.sin(this.spinPhase * 37) * s;
+      this.orthoCamera.position.z += Math.cos(this.spinPhase * 31) * s;
+    }
     this.orthoCamera.lookAt(this.sharedFocus);
 
     const aspect =
@@ -341,6 +386,8 @@ export class WorldRenderer {
     this.missileGeometry.dispose();
     this.mineGeometry.dispose();
     this.oilGeometry.dispose();
+    this.skidGeometry.dispose();
+    this.skidMaterial.dispose();
     for (const mesh of this.projMeshes.values())
       (mesh.material as MeshStandardMaterial).dispose();
     for (const d of this.disposables) d.dispose();
