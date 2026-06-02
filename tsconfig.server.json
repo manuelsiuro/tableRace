@@ -1,0 +1,10 @@
+{
+  "//": "Typechecks the host server + the code it shares with the browser (shared/sim/core). Proves that shared TS compiles under a Node-types config, not just the Vite bundler config — the highest-risk seam (R1). Dev/prod run the server via tsx, so no emit is needed here; this is typecheck-only.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["server", "src/shared", "src/sim", "src/core"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+}

@@ -1,14 +1,6 @@
-import { startThreeScene } from "./scenes/threeScene";
-import { startPixiScene } from "./scenes/pixiScene";
+import { Game } from "./game/Game";
 
-type Engine = "three" | "pixi";
+const mount = document.getElementById("app");
+if (!mount) throw new Error("#app mount element not found");
 
-const params = new URLSearchParams(window.location.search);
-const engine = (params.get("engine") as Engine) ?? "three";
-const mount = document.getElementById("app") as HTMLElement;
-
-if (engine === "pixi") {
-  await startPixiScene(mount);
-} else {
-  startThreeScene(mount);
-}
+new Game(mount).start();
