@@ -1,175 +1,316 @@
-// Top-level orchestrator. Owns the game-flow FSM and, in later milestones, the
-// full race session, world renderer, and Pixi HUD. M1: boot awaits Rapier WASM,
-// then a menu launches a physics demo (a box falling onto the ground) driven by
-// the real fixed-timestep loop + interpolating renderer. Client-side; may touch
-// the DOM (sim/shared/core may not).
+// Top-level orchestrator: owns the game-flow FSM, the per-race session (sim +
+// renderer + Pixi HUD + input + loop), and the menu/countdown/results screens.
+// Client-side; may touch the DOM (sim/shared/core may not).
 
 import {
   GameStateMachine,
   type GameStateName,
 } from "../state/GameStateMachine";
 import { initRapier, type Rapier } from "../sim/physics/RapierInit";
-import { Simulation } from "../sim/Simulation";
+import { Simulation, type CarConfig } from "../sim/Simulation";
 import { createProceduralTrack } from "../sim/track/proceduralTrack";
-import { BALANCED, SPEEDSTER, GRIPPER, HEAVY } from "../sim/car/CarStats";
+import { profileById, SPEEDSTER, GRIPPER, HEAVY } from "../sim/car/CarStats";
 import { EliminationMode } from "../sim/rules/EliminationMode";
-import type { Snapshot } from "../shared/snapshot";
-import { WorldRenderer } from "../render/WorldRenderer";
+import { CircuitMode } from "../sim/rules/CircuitMode";
+import { TimeTrialMode } from "../sim/rules/TimeTrialMode";
+import { BattleMode } from "../sim/rules/BattleMode";
+import type { RaceMode } from "../sim/rules/RaceMode";
+import { WorldRenderer, type CameraMode } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
+import { Hud } from "../ui/Hud";
 import { GameLoop } from "./GameLoop";
+import type { RaceModeId, Snapshot } from "../shared/snapshot";
+
+type ModeChoice = RaceModeId | "freedrive";
+
+const MODE_LABELS: { id: ModeChoice; label: string }[] = [
+  { id: "elimination", label: "Elimination" },
+  { id: "circuit", label: "Circuit (3 laps)" },
+  { id: "timetrial", label: "Time Trial" },
+  { id: "battle", label: "Battle" },
+  { id: "freedrive", label: "Free Drive" },
+];
+
+const CARS = profileRoster();
 
 export class Game {
   private readonly mount: HTMLElement;
   private readonly fsm = new GameStateMachine();
   private rapier: Rapier | null = null;
+  private hud: Hud | null = null;
 
-  // Active session (M2: free-drive). Replaced by a real RaceSession later.
+  // Active session.
   private loop: GameLoop | null = null;
   private renderer: WorldRenderer | null = null;
   private sim: Simulation | null = null;
   private input: InputManager | null = null;
 
+  private selectedMode: ModeChoice = "elimination";
+  private selectedCar = "balanced";
+  private resultsShown = false;
+  private lastSnap: Snapshot | null = null;
+  private overlays: HTMLElement[] = [];
+  private timers: number[] = [];
+
   constructor(mount: HTMLElement) {
     this.mount = mount;
-    this.fsm.onChange((to) => this.renderState(to));
+    this.fsm.onChange((to) => this.onState(to));
   }
 
   async start(): Promise<void> {
     this.renderLoading();
-    // Real boot work: initialize the physics WASM before any world is built.
     this.rapier = await initRapier();
+    this.hud = new Hud();
+    await this.hud.init();
+    this.hud.hide();
     this.fsm.transition("mainMenu");
   }
 
-  // ---- Screens -----------------------------------------------------------
+  // ---- State entry --------------------------------------------------------
+
+  private onState(to: GameStateName): void {
+    switch (to) {
+      case "mainMenu":
+        this.teardownSession();
+        this.renderMainMenu();
+        break;
+      case "carSelect":
+        this.teardownSession();
+        this.renderCarSelect();
+        break;
+      case "countdown":
+        this.startSession();
+        this.runCountdown();
+        break;
+      case "race":
+        this.clearOverlays();
+        this.hud?.show();
+        break;
+      case "results":
+        this.renderResults();
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ---- Screens ------------------------------------------------------------
 
   private renderLoading(): void {
-    this.mount.innerHTML = "";
+    this.resetMount();
     const screen = this.screen("TableRace");
-    const p = document.createElement("p");
-    p.className = "screen-state";
-    p.textContent = "loading physics…";
-    screen.appendChild(p);
+    screen.appendChild(this.note("loading physics…"));
     this.mount.appendChild(screen);
   }
 
-  private renderState(state: GameStateName): void {
-    if (state !== "mainMenu") return; // M1 only drives the menu screen here
-    this.teardownSession();
-    this.mount.innerHTML = "";
+  private renderMainMenu(): void {
+    this.resetMount();
     const screen = this.screen("TableRace");
+    screen.appendChild(this.note("choose a mode"));
+    for (const m of MODE_LABELS) {
+      screen.appendChild(this.button(m.label, () => this.chooseMode(m.id)));
+    }
+    this.mount.appendChild(screen);
+  }
 
-    const sub = document.createElement("p");
-    sub.className = "screen-state";
-    sub.textContent = "M6 — elimination vs bots, with power-ups";
-    screen.appendChild(sub);
-
+  private renderCarSelect(): void {
+    this.resetMount();
+    const screen = this.screen("Choose your car");
+    screen.appendChild(this.note(`mode: ${this.selectedMode}`));
+    for (const c of CARS) {
+      screen.appendChild(
+        this.button(`${c.name} — spd ${c.spd} · grip ${c.grip}`, () =>
+          this.chooseCar(c.id),
+        ),
+      );
+    }
     screen.appendChild(
-      this.button("Race the bots (M6)", () => this.startElimination()),
+      this.button("← Back", () => this.fsm.transition("mainMenu")),
     );
-    screen.appendChild(this.button("Free drive (M3)", () => this.startDrive()));
     this.mount.appendChild(screen);
   }
 
-  // ---- M5 elimination vs AI bots -----------------------------------------
+  private renderResults(): void {
+    this.loop?.pause();
+    const snap = this.lastSnap;
+    const screen = this.overlayScreen();
+    const won = snap?.race.leaderId === 0;
+    const title = document.createElement("h1");
+    title.textContent = won ? "🏆 You win!" : "Race over";
+    screen.appendChild(title);
+    if (snap) screen.appendChild(this.note(this.resultsSummary(snap)));
+    screen.appendChild(
+      this.button("Rematch", () => this.fsm.transition("countdown")),
+    );
+    screen.appendChild(
+      this.button("Main menu", () => this.fsm.transition("mainMenu")),
+    );
+    this.mount.appendChild(screen);
+    this.overlays.push(screen);
+  }
 
-  private startElimination(): void {
+  private resultsSummary(snap: Snapshot): string {
+    const r = snap.race;
+    switch (r.mode) {
+      case "elimination":
+        return `your points: ${r.scores[0] ?? 0}`;
+      case "circuit":
+        return `you finished P${r.positions?.[0] ?? "?"} of ${snap.cars.length}`;
+      case "timetrial":
+        return `best lap: ${((r.bestLapMs?.[0] ?? 0) / 1000).toFixed(2)}s`;
+      case "battle":
+        return r.leaderId === 0 ? "last car standing!" : "you were knocked out";
+    }
+  }
+
+  // ---- Actions ------------------------------------------------------------
+
+  private chooseMode(mode: ModeChoice): void {
+    this.selectedMode = mode;
+    this.fsm.transition("carSelect");
+  }
+
+  private chooseCar(id: string): void {
+    this.selectedCar = id;
+    this.fsm.transition("countdown");
+  }
+
+  private startSession(): void {
     if (!this.rapier) return;
-    this.mount.innerHTML = "";
+    this.resetMount();
 
     const track = createProceduralTrack();
-    const mode = new EliminationMode(4, { pointsToWin: 3 });
+    const { mode, cars, powerups } = this.buildRace(track.checkpoints);
+    const cameraMode: CameraMode =
+      this.selectedMode === "freedrive" ? "follow" : "shared";
+
     this.sim = new Simulation(this.rapier, {
       track,
-      mode,
-      powerups: true,
+      mode: mode ?? undefined,
+      cars,
+      powerups,
       seed: 1,
-      // car 0 = player; cars 1-3 = AI bots with different stats.
-      cars: [
-        { stats: BALANCED },
-        { stats: SPEEDSTER, ai: true },
-        { stats: GRIPPER, ai: true },
-        { stats: HEAVY, ai: true },
-      ],
     });
-    this.renderer = new WorldRenderer(this.mount, { cameraMode: "shared" });
+    this.renderer = new WorldRenderer(this.mount, { cameraMode });
     this.renderer.setTrack(track);
     this.input = new InputManager();
     const input = this.input;
+    this.resultsShown = false;
 
-    const hud = this.makeHud();
     this.loop = new GameLoop(
       this.sim,
       this.renderer,
       () => [input.sample()],
-      (snap) => this.updateHud(hud, snap),
+      (snap) => this.onFrame(snap),
     );
+    this.loop.pause(); // released when the countdown hits GO
     this.loop.start();
 
     this.addBackButton();
-    this.addHint(
-      "Keep up with the bots · grab the yellow boxes · E to use your item",
-    );
   }
 
-  private makeHud(): HTMLDivElement {
-    const hud = document.createElement("div");
-    hud.style.position = "fixed";
-    hud.style.top = "12px";
-    hud.style.left = "50%";
-    hud.style.transform = "translateX(-50%)";
-    hud.style.zIndex = "10";
-    hud.style.textAlign = "center";
-    hud.style.font = "14px ui-monospace, monospace";
-    hud.style.letterSpacing = "0.08em";
-    hud.style.background = "rgba(0,0,0,0.45)";
-    hud.style.padding = "8px 16px";
-    hud.style.borderRadius = "8px";
-    this.mount.appendChild(hud);
-    return hud;
-  }
-
-  private updateHud(hud: HTMLDivElement, snap: Snapshot): void {
-    const { round, phase, scores, leaderId } = snap.race;
-    const you = scores[0] ?? 0;
-    const best = Math.max(...scores);
-    const racing = snap.cars.filter((c) => c.alive).length;
-    if (phase === "finished") {
-      hud.textContent = leaderId === 0 ? "🏆 YOU WIN" : `CPU ${leaderId} WINS`;
-    } else if (phase === "roundEnd") {
-      hud.textContent = `ROUND OVER — your points: ${you} (best ${best})`;
-    } else {
-      const youAlive = snap.cars[0]?.alive ?? false;
-      const item = snap.cars[0]?.item;
-      const itemLabel = item ? ` · item: ${item.toUpperCase()} [E]` : "";
-      hud.textContent = youAlive
-        ? `ROUND ${round + 1} · pts ${you} · ${racing} racing${itemLabel}`
-        : `ELIMINATED — pts ${you} · ${racing} racing`;
+  private buildRace(
+    checkpoints: ReturnType<typeof createProceduralTrack>["checkpoints"],
+  ): {
+    mode: RaceMode | null;
+    cars: CarConfig[];
+    powerups: boolean;
+  } {
+    const player: CarConfig = { stats: profileById(this.selectedCar).stats };
+    const bots: CarConfig[] = [
+      { stats: SPEEDSTER, ai: true },
+      { stats: GRIPPER, ai: true },
+      { stats: HEAVY, ai: true },
+    ];
+    switch (this.selectedMode) {
+      case "elimination":
+        return {
+          mode: new EliminationMode(4, { pointsToWin: 3 }),
+          cars: [player, ...bots],
+          powerups: true,
+        };
+      case "circuit":
+        return {
+          mode: new CircuitMode(4, checkpoints, { totalLaps: 3 }),
+          cars: [player, ...bots],
+          powerups: true,
+        };
+      case "battle":
+        return {
+          mode: new BattleMode(4),
+          cars: [player, ...bots],
+          powerups: true,
+        };
+      case "timetrial":
+        return {
+          mode: new TimeTrialMode(checkpoints, { totalLaps: 3 }),
+          cars: [player],
+          powerups: false,
+        };
+      case "freedrive":
+        return { mode: null, cars: [player], powerups: false };
     }
   }
 
-  // ---- M2 free-drive session ---------------------------------------------
+  private runCountdown(): void {
+    const overlay = this.overlayScreen();
+    const num = document.createElement("h1");
+    num.style.fontSize = "clamp(4rem, 20vw, 12rem)";
+    overlay.appendChild(num);
+    this.mount.appendChild(overlay);
+    this.overlays.push(overlay);
 
-  private startDrive(): void {
-    if (!this.rapier) return;
-    this.mount.innerHTML = "";
-
-    const track = createProceduralTrack();
-    this.sim = new Simulation(this.rapier, {
-      track,
-      cars: [{ stats: BALANCED }],
+    const steps = ["3", "2", "1", "GO!"];
+    steps.forEach((s, i) => {
+      this.timers.push(window.setTimeout(() => (num.textContent = s), i * 700));
     });
-    this.renderer = new WorldRenderer(this.mount);
-    this.renderer.setTrack(track);
-    this.input = new InputManager();
-    const input = this.input;
-    this.loop = new GameLoop(this.sim, this.renderer, () => [input.sample()]);
-    this.loop.start();
-
-    this.addBackButton();
-    this.addHint(
-      "WASD / Arrows to drive · Space to drift · drive forward up the ramp",
+    this.timers.push(
+      window.setTimeout(() => {
+        this.loop?.resume();
+        this.fsm.transition("race");
+      }, steps.length * 700),
     );
+  }
+
+  private onFrame(snap: Snapshot): void {
+    this.lastSnap = snap;
+    this.hud?.update(snap);
+    if (
+      snap.race.phase === "finished" &&
+      !this.resultsShown &&
+      this.fsm.state === "race"
+    ) {
+      this.resultsShown = true;
+      this.fsm.transition("results");
+    }
+  }
+
+  private teardownSession(): void {
+    this.timers.forEach((t) => clearTimeout(t));
+    this.timers = [];
+    this.loop?.stop();
+    this.renderer?.dispose();
+    this.sim?.dispose();
+    this.input?.dispose();
+    this.loop = null;
+    this.renderer = null;
+    this.sim = null;
+    this.input = null;
+    this.lastSnap = null;
+    this.hud?.hide();
+    this.clearOverlays();
+  }
+
+  // ---- DOM helpers --------------------------------------------------------
+
+  private resetMount(): void {
+    this.clearOverlays();
+    this.mount.innerHTML = "";
+  }
+
+  private clearOverlays(): void {
+    this.overlays.forEach((o) => o.remove());
+    this.overlays = [];
   }
 
   private addBackButton(): void {
@@ -179,32 +320,8 @@ export class Game {
     back.style.left = "12px";
     back.style.zIndex = "10";
     this.mount.appendChild(back);
+    this.overlays.push(back);
   }
-
-  private addHint(text: string): void {
-    const hint = document.createElement("p");
-    hint.className = "screen-state";
-    hint.textContent = text;
-    hint.style.position = "fixed";
-    hint.style.bottom = "12px";
-    hint.style.left = "50%";
-    hint.style.transform = "translateX(-50%)";
-    hint.style.zIndex = "10";
-    this.mount.appendChild(hint);
-  }
-
-  private teardownSession(): void {
-    this.loop?.stop();
-    this.renderer?.dispose();
-    this.sim?.dispose();
-    this.input?.dispose();
-    this.loop = null;
-    this.renderer = null;
-    this.sim = null;
-    this.input = null;
-  }
-
-  // ---- DOM helpers -------------------------------------------------------
 
   private screen(titleText: string): HTMLDivElement {
     const screen = document.createElement("div");
@@ -215,6 +332,20 @@ export class Game {
     return screen;
   }
 
+  /** Like screen() but a translucent overlay on top of the running scene. */
+  private overlayScreen(): HTMLDivElement {
+    const screen = document.createElement("div");
+    screen.className = "screen overlay";
+    return screen;
+  }
+
+  private note(text: string): HTMLParagraphElement {
+    const p = document.createElement("p");
+    p.className = "screen-state";
+    p.textContent = text;
+    return p;
+  }
+
   private button(label: string, onClick: () => void): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "menu-button";
@@ -222,4 +353,19 @@ export class Game {
     btn.addEventListener("click", onClick);
     return btn;
   }
+}
+
+// Compact car roster for the select screen (name + a couple of stat hints).
+function profileRoster(): {
+  id: string;
+  name: string;
+  spd: number;
+  grip: number;
+}[] {
+  return [
+    { id: "balanced", name: "Runner", spd: 3, grip: 3 },
+    { id: "speedster", name: "Bolt", spd: 5, grip: 2 },
+    { id: "gripper", name: "Hugger", spd: 2, grip: 5 },
+    { id: "heavy", name: "Tank", spd: 2, grip: 3 },
+  ];
 }

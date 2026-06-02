@@ -157,7 +157,13 @@ export class Simulation {
     return {
       cars: this.cars.map((c, i) => {
         const t = c.body.translation();
-        return { id: c.id, x: t.x, z: t.z, alive: this.alive[i] };
+        return {
+          id: c.id,
+          x: t.x,
+          z: t.z,
+          alive: this.alive[i],
+          stunned: this.powerups?.isStunned(i) ?? false,
+        };
       }),
       track: this.track,
       setAlive: (id, alive) => {
@@ -300,6 +306,7 @@ export class Simulation {
   private raceSnapshot(): RaceSnapshot {
     if (this.mode) return this.mode.race;
     return {
+      mode: "circuit",
       round: 0,
       phase: "racing",
       scores: this.cars.map(() => 0),

@@ -40,6 +40,12 @@ body {
   text-align: center;
 }
 
+/* Translucent overlay drawn on top of the running 3D scene (countdown/results). */
+.screen.overlay {
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.45);
+}
+
 .screen h1 {
   font-size: clamp(2rem, 8vw, 4rem);
   letter-spacing: 0.08em;

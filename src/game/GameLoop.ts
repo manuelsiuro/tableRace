@@ -16,6 +16,7 @@ export class GameLoop {
   private rafId = 0;
   private lastMs = 0;
   private running = false;
+  private paused = false;
   private prev: Snapshot;
   private cur: Snapshot;
 
@@ -42,19 +43,35 @@ export class GameLoop {
     cancelAnimationFrame(this.rafId);
   }
 
+  /** Freeze the simulation (e.g. countdown / pause) while still rendering. */
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.lastMs = 0; // avoid a dt spike across the pause
+  }
+
   private readonly frame = (nowMs: number): void => {
     if (!this.running) return;
     if (this.lastMs === 0) this.lastMs = nowMs; // first frame: no delta
     const dt = (nowMs - this.lastMs) / 1000;
     this.lastMs = nowMs;
 
-    const steps = this.clock.advance(dt);
-    for (let i = 0; i < steps; i++) {
-      this.prev = this.cur;
-      this.cur = this.sim.step(this.inputs());
+    if (!this.paused) {
+      const steps = this.clock.advance(dt);
+      for (let i = 0; i < steps; i++) {
+        this.prev = this.cur;
+        this.cur = this.sim.step(this.inputs());
+      }
     }
 
-    this.renderer.render(this.prev, this.cur, this.clock.alpha);
+    this.renderer.render(
+      this.prev,
+      this.cur,
+      this.paused ? 1 : this.clock.alpha,
+    );
     this.onFrame?.(this.cur);
     this.rafId = requestAnimationFrame(this.frame);
   };

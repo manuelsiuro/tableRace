@@ -12,6 +12,8 @@ export interface RaceCar {
   x: number;
   z: number;
   alive: boolean;
+  /** Currently spun out (e.g. hit by a power-up) — used by Battle mode. */
+  stunned?: boolean;
 }
 
 export interface RaceContext {

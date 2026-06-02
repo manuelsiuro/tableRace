@@ -17,14 +17,14 @@ export type GameStateName =
 /** Allowed transitions: from → set of reachable states. */
 const TRANSITIONS: Record<GameStateName, readonly GameStateName[]> = {
   boot: ["mainMenu"],
-  mainMenu: ["lobby"],
+  mainMenu: ["lobby", "carSelect"], // carSelect = single-player
   lobby: ["carSelect", "mainMenu"],
-  carSelect: ["trackSelect", "lobby"],
+  carSelect: ["countdown", "trackSelect", "lobby", "mainMenu"],
   trackSelect: ["countdown", "carSelect"],
-  countdown: ["race"],
-  race: ["paused", "results"],
+  countdown: ["race", "mainMenu"],
+  race: ["paused", "results", "mainMenu"],
   paused: ["race", "mainMenu"],
-  results: ["countdown", "mainMenu"], // countdown = rematch
+  results: ["countdown", "carSelect", "mainMenu"], // countdown = rematch
 };
 
 /** True while the fixed-timestep simulation should be advancing. */

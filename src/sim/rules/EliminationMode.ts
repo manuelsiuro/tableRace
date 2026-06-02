@@ -117,6 +117,7 @@ export class EliminationMode implements RaceMode {
 
   get race(): RaceSnapshot {
     return {
+      mode: "elimination",
       round: this.round,
       phase: this.phase,
       scores: [...this.scores],

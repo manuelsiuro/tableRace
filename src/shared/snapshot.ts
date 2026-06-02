@@ -58,12 +58,25 @@ export interface CameraSnapshot {
   zoom: number;
 }
 
+export type RaceModeId = "elimination" | "circuit" | "timetrial" | "battle";
+
 export interface RaceSnapshot {
+  mode: RaceModeId;
   round: number;
   phase: RacePhase;
   /** Points per car, indexed by car id. */
   scores: number[];
   leaderId: number;
+  // --- optional, mode-specific HUD data (indexed by car id where applicable) ---
+  totalLaps?: number;
+  laps?: number[];
+  /** 1-based finishing/running place per car. */
+  positions?: number[];
+  lives?: number[];
+  /** Current-lap elapsed time (ms) per car. */
+  lapMs?: number[];
+  /** Best lap time (ms) per car, or 0 if none yet. */
+  bestLapMs?: number[];
 }
 
 export interface Snapshot {
