@@ -61,11 +61,11 @@ export class Game {
 
     const sub = document.createElement("p");
     sub.className = "screen-state";
-    sub.textContent = "M5 — elimination vs AI bots";
+    sub.textContent = "M6 — elimination vs bots, with power-ups";
     screen.appendChild(sub);
 
     screen.appendChild(
-      this.button("Race the bots (M5)", () => this.startElimination()),
+      this.button("Race the bots (M6)", () => this.startElimination()),
     );
     screen.appendChild(this.button("Free drive (M3)", () => this.startDrive()));
     this.mount.appendChild(screen);
@@ -82,6 +82,8 @@ export class Game {
     this.sim = new Simulation(this.rapier, {
       track,
       mode,
+      powerups: true,
+      seed: 1,
       // car 0 = player; cars 1-3 = AI bots with different stats.
       cars: [
         { stats: BALANCED },
@@ -106,7 +108,7 @@ export class Game {
 
     this.addBackButton();
     this.addHint(
-      "Keep up with the bots — don't fall off the back of the screen",
+      "Keep up with the bots · grab the yellow boxes · E to use your item",
     );
   }
 
@@ -138,9 +140,11 @@ export class Game {
       hud.textContent = `ROUND OVER — your points: ${you} (best ${best})`;
     } else {
       const youAlive = snap.cars[0]?.alive ?? false;
+      const item = snap.cars[0]?.item;
+      const itemLabel = item ? ` · item: ${item.toUpperCase()} [E]` : "";
       hud.textContent = youAlive
-        ? `ROUND ${round + 1} · your points: ${you} · ${racing} still racing`
-        : `ELIMINATED — your points: ${you} · ${racing} still racing`;
+        ? `ROUND ${round + 1} · pts ${you} · ${racing} racing${itemLabel}`
+        : `ELIMINATED — pts ${you} · ${racing} racing`;
     }
   }
 

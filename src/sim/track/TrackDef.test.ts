@@ -70,6 +70,7 @@ describe("surfaceAt", () => {
     ],
     checkpoints: [],
     waypoints: [],
+    powerupSpawns: [],
     bounds: { minX: -10, maxX: 20, minZ: -10, maxZ: 20 },
   };
 

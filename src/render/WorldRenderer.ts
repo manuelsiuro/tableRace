@@ -8,6 +8,8 @@ import {
   AmbientLight,
   BoxGeometry,
   BufferGeometry,
+  CircleGeometry,
+  CylinderGeometry,
   DirectionalLight,
   Float32BufferAttribute,
   GridHelper,
@@ -17,12 +19,14 @@ import {
   PerspectiveCamera,
   PlaneGeometry,
   Scene,
+  SphereGeometry,
   Vector3,
   WebGLRenderer,
 } from "three";
 import { lerp } from "../shared/math";
-import type { Snapshot } from "../shared/snapshot";
+import type { PowerupId, Snapshot } from "../shared/snapshot";
 import type { SurfaceId, TrackDef } from "../sim/track/TrackDef";
+import { POWERUP_DEFS } from "../sim/powerups/PowerupDefs";
 import { interpolateCar } from "./Interpolator";
 
 const CAR_COLORS = [
@@ -52,6 +56,18 @@ export class WorldRenderer {
   private readonly groundGeometry: PlaneGeometry;
   private readonly groundMaterial: MeshStandardMaterial;
   private readonly disposables: { dispose(): void }[] = [];
+  // Dynamic entity pools, reconciled by id each frame.
+  private readonly pickupMeshes = new Map<number, Mesh>();
+  private readonly projMeshes = new Map<number, Mesh>();
+  private readonly pickupGeometry = new BoxGeometry(1, 1, 1);
+  private readonly pickupMaterial = new MeshStandardMaterial({
+    color: 0xfacc15,
+    emissive: 0x665500,
+  });
+  private readonly missileGeometry = new SphereGeometry(0.35, 12, 12);
+  private readonly mineGeometry = new CylinderGeometry(0.5, 0.5, 0.2, 12);
+  private readonly oilGeometry = new CircleGeometry(2.6, 20);
+  private spinPhase = 0;
   private readonly focus = new Vector3();
   private readonly desiredCamPos = new Vector3();
   private readonly camOffset = new Vector3(0, 16, -15);
@@ -113,7 +129,15 @@ export class WorldRenderer {
         t.rotation.w,
       );
       mesh.visible = car.alive;
+      const mat = mesh.material as MeshStandardMaterial;
+      mat.emissive.setHex(
+        car.boosting ? 0x884400 : car.stunned ? 0x444444 : 0x000000,
+      );
     }
+
+    this.spinPhase += 0.05;
+    this.updatePickups(cur);
+    this.updateProjectiles(cur);
 
     if (this.cameraMode === "shared") {
       this.updateSharedCamera(prev, cur, alpha);
@@ -122,6 +146,62 @@ export class WorldRenderer {
       this.updateCamera(prev, cur, alpha);
       this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  /** Reconcile floating pickup boxes against the snapshot (stable ids). */
+  private updatePickups(cur: Snapshot): void {
+    const seen = new Set<number>();
+    for (const p of cur.pickups) {
+      seen.add(p.id);
+      let mesh = this.pickupMeshes.get(p.id);
+      if (!mesh) {
+        mesh = new Mesh(this.pickupGeometry, this.pickupMaterial);
+        this.scene.add(mesh);
+        this.pickupMeshes.set(p.id, mesh);
+      }
+      mesh.position.set(p.x, 1, p.z);
+      mesh.rotation.y = this.spinPhase;
+    }
+    for (const [id, mesh] of this.pickupMeshes) {
+      if (!seen.has(id)) {
+        this.scene.remove(mesh);
+        this.pickupMeshes.delete(id);
+      }
+    }
+  }
+
+  /** Reconcile missiles / mines / oil patches (unique ids) from the snapshot. */
+  private updateProjectiles(cur: Snapshot): void {
+    const seen = new Set<number>();
+    for (const p of cur.projectiles) {
+      seen.add(p.id);
+      let mesh = this.projMeshes.get(p.id);
+      if (!mesh) {
+        mesh = this.makeProjectileMesh(p.kind);
+        this.scene.add(mesh);
+        this.projMeshes.set(p.id, mesh);
+      }
+      mesh.position.set(p.x, p.y, p.z);
+      if (p.kind === "oil") mesh.rotation.x = -Math.PI / 2;
+    }
+    for (const [id, mesh] of this.projMeshes) {
+      if (!seen.has(id)) {
+        this.scene.remove(mesh);
+        (mesh.material as MeshStandardMaterial).dispose();
+        this.projMeshes.delete(id);
+      }
+    }
+  }
+
+  private makeProjectileMesh(kind: PowerupId): Mesh {
+    const geo =
+      kind === "missile"
+        ? this.missileGeometry
+        : kind === "mine"
+          ? this.mineGeometry
+          : this.oilGeometry;
+    const mat = new MeshStandardMaterial({ color: POWERUP_DEFS[kind].color });
+    return new Mesh(geo, mat);
   }
 
   /** Build static visuals (walls, ramp, surface patches) from a TrackDef. */
@@ -256,6 +336,13 @@ export class WorldRenderer {
     this.carGeometry.dispose();
     this.groundGeometry.dispose();
     this.groundMaterial.dispose();
+    this.pickupGeometry.dispose();
+    this.pickupMaterial.dispose();
+    this.missileGeometry.dispose();
+    this.mineGeometry.dispose();
+    this.oilGeometry.dispose();
+    for (const mesh of this.projMeshes.values())
+      (mesh.material as MeshStandardMaterial).dispose();
     for (const d of this.disposables) d.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

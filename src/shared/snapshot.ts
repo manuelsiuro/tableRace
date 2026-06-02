@@ -23,13 +23,25 @@ export interface CarSnapshot {
   alive: boolean;
   /** Held power-up, or null. */
   item: PowerupId | null;
+  /** Render cues. */
+  shield?: boolean;
+  boosting?: boolean;
+  stunned?: boolean;
 }
 
+/** A live missile / dropped mine / oil patch — `kind` selects which. */
 export interface ProjectileSnapshot {
   id: number;
   kind: PowerupId;
   x: number;
   y: number;
+  z: number;
+}
+
+/** An un-collected power-up box on the track. */
+export interface PickupSnapshot {
+  id: number;
+  x: number;
   z: number;
 }
 
@@ -62,4 +74,5 @@ export interface Snapshot {
   camera: CameraSnapshot;
   race: RaceSnapshot;
   projectiles: ProjectileSnapshot[];
+  pickups: PickupSnapshot[];
 }

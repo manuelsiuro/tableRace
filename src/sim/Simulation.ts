@@ -15,6 +15,8 @@ import { SURFACE_TABLE } from "./track/SurfaceTable";
 import type { RaceContext, RaceMode } from "./rules/RaceMode";
 import { progressAlong } from "./rules/progress";
 import { AiDriver, type AiDifficulty, type AiView } from "./ai/AiDriver";
+import { PowerupSystem } from "./powerups/PowerupSystem";
+import type { SurfaceModifier } from "./track/SurfaceTable";
 import { NEUTRAL_INPUT, type InputAction } from "../shared/inputAction";
 import type {
   CameraSnapshot,
@@ -40,6 +42,10 @@ export interface SimulationOptions {
   track?: TrackDef;
   /** Optional race mode (elimination/circuit/…). Free-drive if omitted. */
   mode?: RaceMode;
+  /** Enable power-ups (requires the track to define powerupSpawns). */
+  powerups?: boolean;
+  /** Seed for deterministic power-up rolls. */
+  seed?: number;
 }
 
 export class Simulation {
@@ -50,6 +56,7 @@ export class Simulation {
   private readonly alive: boolean[] = [];
   /** One slot per car; non-null entries are AI-controlled. */
   private readonly aiDrivers: (AiDriver | null)[] = [];
+  private readonly powerups: PowerupSystem | null;
   private currentTick = 0;
 
   constructor(rapier: Rapier, options: SimulationOptions = {}) {
@@ -73,15 +80,16 @@ export class Simulation {
       this.alive.push(true);
       this.aiDrivers.push(cfg.ai ? new AiDriver(cfg.difficulty) : null);
     });
+
+    const spawns = this.track?.powerupSpawns ?? [];
+    this.powerups =
+      options.powerups && spawns.length > 0
+        ? new PowerupSystem(this.cars.length, spawns, options.seed ?? 1)
+        : null;
   }
 
-  /** Compute InputActions for AI-controlled cars (indexed by car id). */
-  private computeAiInputs(): (InputAction | null)[] {
-    const inputs: (InputAction | null)[] = this.cars.map(() => null);
-    if (!this.aiDrivers.some((d) => d)) return inputs;
-
-    const wps = this.track?.waypoints ?? [];
-    const views: AiView[] = this.cars.map((c) => {
+  private carViews(): AiView[] {
+    return this.cars.map((c) => {
       const t = c.body.translation();
       const v = c.body.linvel();
       return {
@@ -92,28 +100,53 @@ export class Simulation {
         speed: Math.hypot(v.x, v.z),
       };
     });
+  }
 
-    // Rank alive cars by track progress (leader = rank 0) for rubber-banding.
+  /** Raw track progress + normalized rank (0 leader … 1 last) per car id. */
+  private computeStandings(views: AiView[]): {
+    progress: number[];
+    rankFactor: number[];
+  } {
+    const wps = this.track?.waypoints ?? [];
+    const progress = views.map((v) =>
+      wps.length >= 2 ? progressAlong(wps, v.x, v.z) : v.z,
+    );
+
     const aliveIds = this.cars.map((_, i) => i).filter((i) => this.alive[i]);
-    const progressOf = (i: number) =>
-      wps.length >= 2 ? progressAlong(wps, views[i].x, views[i].z) : views[i].z;
-    const ordered = [...aliveIds].sort((a, b) => progressOf(b) - progressOf(a));
-    const rankOf = new Map<number, number>();
-    ordered.forEach((id, idx) => rankOf.set(id, idx));
+    const ordered = [...aliveIds].sort((a, b) => progress[b] - progress[a]);
     const denom = Math.max(1, aliveIds.length - 1);
+    const rankFactor = this.cars.map(() => 1); // eliminated default to "last"
+    ordered.forEach((id, idx) => (rankFactor[id] = idx / denom));
+    return { progress, rankFactor };
+  }
 
+  /** Compute InputActions for AI-controlled cars (indexed by car id). */
+  private computeAiInputs(
+    views: AiView[],
+    rankFactor: number[],
+  ): (InputAction | null)[] {
+    const inputs: (InputAction | null)[] = this.cars.map(() => null);
+    if (!this.aiDrivers.some((d) => d)) return inputs;
+    const wps = this.track?.waypoints ?? [];
     for (let i = 0; i < this.cars.length; i++) {
       const driver = this.aiDrivers[i];
       if (!driver || !this.alive[i]) continue;
-      const others = views.filter((_, j) => j !== i && this.alive[j]);
       inputs[i] = driver.update({
         self: views[i],
         waypoints: wps,
-        others,
-        rankFactor: (rankOf.get(i) ?? 0) / denom,
+        others: views.filter((_, j) => j !== i && this.alive[j]),
+        rankFactor: rankFactor[i],
       });
     }
     return inputs;
+  }
+
+  private combine(a: SurfaceModifier, b: SurfaceModifier): SurfaceModifier {
+    return {
+      gripMul: a.gripMul * b.gripMul,
+      accelMul: a.accelMul * b.accelMul,
+      maxSpeedMul: a.maxSpeedMul * b.maxSpeedMul,
+    };
   }
 
   private spawnFor(i: number, explicit?: CarSpawn): CarSpawn {
@@ -162,21 +195,60 @@ export class Simulation {
 
   /** Advance one fixed step. Inputs are indexed by car id; missing = neutral. */
   step(inputs: InputAction[]): Snapshot {
-    const aiInputs = this.computeAiInputs();
+    const views = this.carViews();
+    const { progress, rankFactor } = this.computeStandings(views);
+    const aiInputs = this.computeAiInputs(views, rankFactor);
+
+    // Resolve each car's input: AI > external; stunned cars lose control.
+    const resolved: InputAction[] = this.cars.map((_, i) => {
+      if (this.powerups?.isStunned(i)) return NEUTRAL_INPUT;
+      return aiInputs[i] ?? inputs[i] ?? NEUTRAL_INPUT;
+    });
+
     for (let i = 0; i < this.cars.length; i++) {
       if (!this.alive[i]) continue; // eliminated cars sit out the round
       const car = this.cars[i];
-      const input = aiInputs[i] ?? inputs[i] ?? NEUTRAL_INPUT;
       const pos = car.body.translation();
-      const surface = this.track
+      let mod: SurfaceModifier = this.track
         ? SURFACE_TABLE[surfaceAt(this.track, pos.x, pos.z)]
         : SURFACE_TABLE.tarmac;
-      car.update(input, STEP_S, surface);
+      if (this.powerups)
+        mod = this.combine(mod, this.powerups.effectModifier(i));
+      car.update(resolved[i], STEP_S, mod);
     }
+
     this.physics.step();
     if (this.mode) this.mode.step(this.raceContext(), STEP_S);
+    if (this.powerups) {
+      this.powerups.step({ cars: this.puCars(resolved, rankFactor, progress) });
+    }
     this.currentTick++;
     return this.snapshot();
+  }
+
+  /** Build the power-up system's per-car view for this step. */
+  private puCars(
+    resolved: InputAction[],
+    rankFactor: number[],
+    progress: number[],
+  ) {
+    return this.cars.map((c, i) => {
+      const t = c.body.translation();
+      const isAi = this.aiDrivers[i] !== null;
+      return {
+        id: c.id,
+        x: t.x,
+        z: t.z,
+        yaw: c.yaw,
+        alive: this.alive[i],
+        // Bots fire as soon as they hold something; humans press the button.
+        usePowerup: isAi
+          ? this.powerups!.heldItem(i) !== null
+          : resolved[i].usePowerup,
+        rankFactor: rankFactor[i],
+        progress: progress[i],
+      };
+    });
   }
 
   /** Current world state without advancing — used to seed the render loop. */
@@ -197,7 +269,10 @@ export class Simulation {
         vx: v.x,
         vz: v.z,
         alive: this.alive[i],
-        item: null,
+        item: this.powerups?.heldItem(i) ?? null,
+        shield: this.powerups?.hasShield(i) || undefined,
+        boosting: this.powerups?.isBoosting(i) || undefined,
+        stunned: this.powerups?.isStunned(i) || undefined,
       };
     });
 
@@ -208,7 +283,8 @@ export class Simulation {
       cars,
       camera: this.cameraSnapshot(),
       race: this.raceSnapshot(),
-      projectiles: [],
+      projectiles: this.powerups?.projectilesSnapshot() ?? [],
+      pickups: this.powerups?.pickupsSnapshot() ?? [],
     };
   }
 

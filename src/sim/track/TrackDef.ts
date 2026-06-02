@@ -65,6 +65,8 @@ export interface TrackDef {
   surfaceZones: SurfaceZone[];
   checkpoints: Checkpoint[];
   waypoints: Vec3[];
+  /** Power-up box spawn anchors. */
+  powerupSpawns: Vec3[];
   /** Outer extent — used as a fallback kill volume and camera clamp. */
   bounds: AABB2;
 }

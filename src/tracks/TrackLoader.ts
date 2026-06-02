@@ -56,6 +56,7 @@ export async function loadTrack(url: string, id: string): Promise<TrackDef> {
   const surfaceZones: SurfaceZone[] = [];
   const checkpoints: Checkpoint[] = [];
   const waypointEntries: { index: number; pos: Vec3 }[] = [];
+  const powerupSpawns: Vec3[] = [];
 
   gltf.scene.traverse((obj) => {
     const c = classifyNode(obj.name);
@@ -100,6 +101,9 @@ export async function loadTrack(url: string, id: string): Promise<TrackDef> {
           pos: worldPos(obj),
         });
         break;
+      case "powerup":
+        powerupSpawns.push(worldPos(obj));
+        break;
       default:
         break;
     }
@@ -115,6 +119,7 @@ export async function loadTrack(url: string, id: string): Promise<TrackDef> {
     waypoints: waypointEntries
       .sort((a, b) => a.index - b.index)
       .map((e) => e.pos),
+    powerupSpawns,
     bounds: {
       minX: bounds.min.x,
       maxX: bounds.max.x,

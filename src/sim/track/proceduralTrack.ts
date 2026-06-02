@@ -123,6 +123,15 @@ export function createProceduralTrack(half = 30): TrackDef {
       radius: 6,
     })),
     waypoints,
+    // Power-up boxes spaced around the loop.
+    powerupSpawns: [
+      { x: 9, y: 0, z: -19 },
+      { x: 20, y: 0, z: 0 },
+      { x: 10, y: 0, z: 20 },
+      { x: -10, y: 0, z: 20 },
+      { x: -20, y: 0, z: 0 },
+      { x: -9, y: 0, z: -19 },
+    ],
     bounds: { minX: -half, maxX: half, minZ: -half, maxZ: half },
   };
 }
