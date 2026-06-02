@@ -13,12 +13,14 @@ import {
   GridHelper,
   Mesh,
   MeshStandardMaterial,
+  OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
   Scene,
   Vector3,
   WebGLRenderer,
 } from "three";
+import { lerp } from "../shared/math";
 import type { Snapshot } from "../shared/snapshot";
 import type { SurfaceId, TrackDef } from "../sim/track/TrackDef";
 import { interpolateCar } from "./Interpolator";
@@ -36,10 +38,14 @@ const SURFACE_COLORS: Record<SurfaceId, number> = {
   oil: 0x141414,
 };
 
+export type CameraMode = "follow" | "shared";
+
 export class WorldRenderer {
   private readonly parent: HTMLElement;
   private readonly scene = new Scene();
   private readonly camera: PerspectiveCamera;
+  private readonly orthoCamera: OrthographicCamera;
+  private readonly cameraMode: CameraMode;
   private readonly renderer: WebGLRenderer;
   private readonly carMeshes = new Map<number, Mesh>();
   private readonly carGeometry = new BoxGeometry(1.2, 0.8, 2.0);
@@ -49,11 +55,15 @@ export class WorldRenderer {
   private readonly focus = new Vector3();
   private readonly desiredCamPos = new Vector3();
   private readonly camOffset = new Vector3(0, 16, -15);
+  // Shared-camera ortho rig: high and slightly behind, looking at the focus.
+  private readonly sharedOffset = new Vector3(0, 60, -28);
+  private readonly sharedFocus = new Vector3();
   private cameraInitialized = false;
   private readonly onResize = () => this.resize();
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, opts: { cameraMode?: CameraMode } = {}) {
     this.parent = parent;
+    this.cameraMode = opts.cameraMode ?? "follow";
 
     this.renderer = new WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -62,6 +72,10 @@ export class WorldRenderer {
     this.camera = new PerspectiveCamera(55, 1, 0.1, 400);
     this.camera.position.set(0, 16, -15);
     this.camera.lookAt(0, 0, 0);
+
+    this.orthoCamera = new OrthographicCamera(-20, 20, 20, -20, 0.1, 300);
+    this.orthoCamera.position.set(0, 60, -28);
+    this.orthoCamera.lookAt(0, 0, 0);
 
     this.scene.add(new AmbientLight(0xffffff, 0.6));
     const sun = new DirectionalLight(0xffffff, 2);
@@ -101,8 +115,13 @@ export class WorldRenderer {
       mesh.visible = car.alive;
     }
 
-    this.updateCamera(prev, cur, alpha);
-    this.renderer.render(this.scene, this.camera);
+    if (this.cameraMode === "shared") {
+      this.updateSharedCamera(prev, cur, alpha);
+      this.renderer.render(this.scene, this.orthoCamera);
+    } else {
+      this.updateCamera(prev, cur, alpha);
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   /** Build static visuals (walls, ramp, surface patches) from a TrackDef. */
@@ -183,6 +202,30 @@ export class WorldRenderer {
       this.camera.position.lerp(this.desiredCamPos, 0.08);
     }
     this.camera.lookAt(this.focus);
+  }
+
+  /** Shared leader camera driven by the authoritative Snapshot.camera (M4). */
+  private updateSharedCamera(
+    prev: Snapshot,
+    cur: Snapshot,
+    alpha: number,
+  ): void {
+    const x = lerp(prev.camera.x, cur.camera.x, alpha);
+    const z = lerp(prev.camera.z, cur.camera.z, alpha);
+    const zoom =
+      lerp(prev.camera.zoom, cur.camera.zoom, alpha) || cur.camera.zoom;
+
+    this.sharedFocus.set(x, 0, z);
+    this.orthoCamera.position.copy(this.sharedFocus).add(this.sharedOffset);
+    this.orthoCamera.lookAt(this.sharedFocus);
+
+    const aspect =
+      (this.parent.clientWidth || 1) / (this.parent.clientHeight || 1);
+    this.orthoCamera.top = zoom;
+    this.orthoCamera.bottom = -zoom;
+    this.orthoCamera.left = -zoom * aspect;
+    this.orthoCamera.right = zoom * aspect;
+    this.orthoCamera.updateProjectionMatrix();
   }
 
   private meshFor(id: number): Mesh {

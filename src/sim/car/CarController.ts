@@ -26,6 +26,7 @@ export class CarController {
 
   private readonly physics: PhysicsWorld;
   private readonly groundRayLength: number;
+  private readonly spawnY: number;
 
   constructor(
     physics: PhysicsWorld,
@@ -38,15 +39,25 @@ export class CarController {
     this.stats = stats;
     this.yaw = spawn.yaw;
 
-    const y = stats.halfExtents.y + 0.1;
+    this.spawnY = stats.halfExtents.y + 0.1;
     this.body = physics.createCarBody(
-      { x: spawn.x, y, z: spawn.z },
+      { x: spawn.x, y: this.spawnY, z: spawn.z },
       stats.halfExtents,
     );
     this.body.setRotation(quatFromYaw(spawn.yaw), false);
 
     // Probe just past the chassis bottom.
     this.groundRayLength = stats.halfExtents.y + 0.25;
+  }
+
+  /** Teleport back to a spawn, fully stopped — used on round reset / fall-out. */
+  respawn(spawn: CarSpawn): void {
+    this.body.setTranslation({ x: spawn.x, y: this.spawnY, z: spawn.z }, true);
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.yaw = spawn.yaw;
+    this.body.setRotation(quatFromYaw(spawn.yaw), true);
+    this.drifting = false;
   }
 
   update(

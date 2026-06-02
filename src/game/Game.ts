@@ -12,6 +12,9 @@ import { initRapier, type Rapier } from "../sim/physics/RapierInit";
 import { Simulation } from "../sim/Simulation";
 import { createProceduralTrack } from "../sim/track/proceduralTrack";
 import { BALANCED } from "../sim/car/CarStats";
+import { EliminationMode } from "../sim/rules/EliminationMode";
+import { NEUTRAL_INPUT } from "../shared/inputAction";
+import type { Snapshot } from "../shared/snapshot";
 import { WorldRenderer } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
 import { GameLoop } from "./GameLoop";
@@ -59,13 +62,78 @@ export class Game {
 
     const sub = document.createElement("p");
     sub.className = "screen-state";
-    sub.textContent = "M3 — track: walls, ramp, ice & grass";
+    sub.textContent = "M4 — elimination: outrun the CPU off the screen";
     screen.appendChild(sub);
 
     screen.appendChild(
-      this.button("Drive the track (M3)", () => this.startDrive()),
+      this.button("Elimination (M4)", () => this.startElimination()),
     );
+    screen.appendChild(this.button("Free drive (M3)", () => this.startDrive()));
     this.mount.appendChild(screen);
+  }
+
+  // ---- M4 elimination session --------------------------------------------
+
+  private startElimination(): void {
+    if (!this.rapier) return;
+    this.mount.innerHTML = "";
+
+    const track = createProceduralTrack();
+    const mode = new EliminationMode(2, { pointsToWin: 3 });
+    this.sim = new Simulation(this.rapier, {
+      track,
+      mode,
+      cars: [{ stats: BALANCED }, { stats: BALANCED }],
+    });
+    this.renderer = new WorldRenderer(this.mount, { cameraMode: "shared" });
+    this.renderer.setTrack(track);
+    this.input = new InputManager();
+    const input = this.input;
+
+    const hud = this.makeHud();
+    // car 0 = player; car 1 = idle CPU (falls behind → eliminated → you score).
+    this.loop = new GameLoop(
+      this.sim,
+      this.renderer,
+      () => [input.sample(), NEUTRAL_INPUT],
+      (snap) => this.updateHud(hud, snap),
+    );
+    this.loop.start();
+
+    this.addBackButton();
+    this.addHint(
+      "Drive away — leave the red CPU car off-screen to score the round",
+    );
+  }
+
+  private makeHud(): HTMLDivElement {
+    const hud = document.createElement("div");
+    hud.style.position = "fixed";
+    hud.style.top = "12px";
+    hud.style.left = "50%";
+    hud.style.transform = "translateX(-50%)";
+    hud.style.zIndex = "10";
+    hud.style.textAlign = "center";
+    hud.style.font = "14px ui-monospace, monospace";
+    hud.style.letterSpacing = "0.08em";
+    hud.style.background = "rgba(0,0,0,0.45)";
+    hud.style.padding = "8px 16px";
+    hud.style.borderRadius = "8px";
+    this.mount.appendChild(hud);
+    return hud;
+  }
+
+  private updateHud(hud: HTMLDivElement, snap: Snapshot): void {
+    const { round, phase, scores, leaderId } = snap.race;
+    const you = scores[0] ?? 0;
+    const cpu = scores[1] ?? 0;
+    if (phase === "finished") {
+      hud.textContent = leaderId === 0 ? "🏆 YOU WIN" : "CPU WINS";
+    } else if (phase === "roundEnd") {
+      hud.textContent = `ROUND OVER — YOU ${you} : ${cpu} CPU`;
+    } else {
+      hud.textContent = `ROUND ${round + 1} · YOU ${you} : ${cpu} CPU`;
+    }
   }
 
   // ---- M2 free-drive session ---------------------------------------------
@@ -86,17 +154,25 @@ export class Game {
     this.loop = new GameLoop(this.sim, this.renderer, () => [input.sample()]);
     this.loop.start();
 
+    this.addBackButton();
+    this.addHint(
+      "WASD / Arrows to drive · Space to drift · drive forward up the ramp",
+    );
+  }
+
+  private addBackButton(): void {
     const back = this.button("← Back", () => this.fsm.transition("mainMenu"));
     back.style.position = "fixed";
     back.style.top = "12px";
     back.style.left = "12px";
     back.style.zIndex = "10";
     this.mount.appendChild(back);
+  }
 
+  private addHint(text: string): void {
     const hint = document.createElement("p");
     hint.className = "screen-state";
-    hint.textContent =
-      "WASD / Arrows to drive · Space to drift · drive +forward up the ramp";
+    hint.textContent = text;
     hint.style.position = "fixed";
     hint.style.bottom = "12px";
     hint.style.left = "50%";

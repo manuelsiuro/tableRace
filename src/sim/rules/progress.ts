@@ -1,0 +1,42 @@
+// Track progress along the waypoint loop — how far a car is around the circuit.
+// Used to pick the race leader (camera target) and to rank standings. Pure +
+// deterministic; also reused by AI (M5) and circuit/lap modes (M7).
+
+import type { Vec3 } from "../../shared/math";
+
+/**
+ * Distance travelled along the closed waypoint polyline for the point nearest
+ * the path. Monotonic around the loop, so the car with the greatest value is
+ * "ahead".
+ */
+export function progressAlong(waypoints: Vec3[], x: number, z: number): number {
+  if (waypoints.length < 2) return 0;
+
+  let bestDist = Infinity;
+  let bestProgress = 0;
+  let cumulative = 0;
+
+  for (let i = 0; i < waypoints.length; i++) {
+    const a = waypoints[i];
+    const b = waypoints[(i + 1) % waypoints.length];
+    const abx = b.x - a.x;
+    const abz = b.z - a.z;
+    const segLenSq = abx * abx + abz * abz || 1e-6;
+
+    let t = ((x - a.x) * abx + (z - a.z) * abz) / segLenSq;
+    t = Math.max(0, Math.min(1, t));
+
+    const px = a.x + abx * t;
+    const pz = a.z + abz * t;
+    const d = Math.hypot(x - px, z - pz);
+    const segLen = Math.sqrt(segLenSq);
+
+    if (d < bestDist) {
+      bestDist = d;
+      bestProgress = cumulative + t * segLen;
+    }
+    cumulative += segLen;
+  }
+
+  return bestProgress;
+}

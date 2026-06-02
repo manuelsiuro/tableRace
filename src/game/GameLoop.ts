@@ -23,6 +23,8 @@ export class GameLoop {
     private readonly sim: Simulation,
     private readonly renderer: WorldRenderer,
     private readonly inputs: InputProvider = () => [],
+    /** Called each rendered frame with the latest snapshot (e.g. for the HUD). */
+    private readonly onFrame?: (snapshot: Snapshot) => void,
   ) {
     this.cur = sim.snapshot();
     this.prev = this.cur;
@@ -53,6 +55,7 @@ export class GameLoop {
     }
 
     this.renderer.render(this.prev, this.cur, this.clock.alpha);
+    this.onFrame?.(this.cur);
     this.rafId = requestAnimationFrame(this.frame);
   };
 }
