@@ -13,6 +13,15 @@ export default tseslint.config(
       ecmaVersion: 2022,
       sourceType: "module",
     },
+    rules: {
+      // Allow intentionally-unused params/vars when prefixed with `_`
+      // (e.g. `step(_inputs)` before a system consumes them). Matches tsc's
+      // noUnusedParameters convention.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
+    },
   },
   // ARCHITECTURAL BOUNDARY: the simulation and the code it shares with the Node
   // host must stay render-free, DOM-free, and deterministic, so the SAME code

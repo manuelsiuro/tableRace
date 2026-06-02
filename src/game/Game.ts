@@ -1,53 +1,107 @@
 // Top-level orchestrator. Owns the game-flow FSM and, in later milestones, the
-// fixed-timestep loop, the Three.js world renderer, and the Pixi HUD. For now it
-// boots to a placeholder main menu so the skeleton runs end to end. This file is
-// client-side and may touch the DOM (sim/shared/core may not).
+// full race session, world renderer, and Pixi HUD. M1: boot awaits Rapier WASM,
+// then a menu launches a physics demo (a box falling onto the ground) driven by
+// the real fixed-timestep loop + interpolating renderer. Client-side; may touch
+// the DOM (sim/shared/core may not).
 
 import {
   GameStateMachine,
   type GameStateName,
 } from "../state/GameStateMachine";
+import { initRapier, type Rapier } from "../sim/physics/RapierInit";
+import { Simulation } from "../sim/Simulation";
+import { WorldRenderer } from "../render/WorldRenderer";
+import { GameLoop } from "./GameLoop";
 
 export class Game {
   private readonly mount: HTMLElement;
   private readonly fsm = new GameStateMachine();
+  private rapier: Rapier | null = null;
+
+  // Active demo session (M1). Replaced by a real RaceSession in later milestones.
+  private loop: GameLoop | null = null;
+  private renderer: WorldRenderer | null = null;
+  private sim: Simulation | null = null;
 
   constructor(mount: HTMLElement) {
     this.mount = mount;
     this.fsm.onChange((to) => this.renderState(to));
   }
 
-  start(): void {
-    // boot → mainMenu. Real boot will await Rapier WASM + asset preload here.
+  async start(): Promise<void> {
+    this.renderLoading();
+    // Real boot work: initialize the physics WASM before any world is built.
+    this.rapier = await initRapier();
     this.fsm.transition("mainMenu");
   }
 
-  private renderState(state: GameStateName): void {
+  // ---- Screens -----------------------------------------------------------
+
+  private renderLoading(): void {
     this.mount.innerHTML = "";
+    const screen = this.screen("TableRace");
+    const p = document.createElement("p");
+    p.className = "screen-state";
+    p.textContent = "loading physics…";
+    screen.appendChild(p);
+    this.mount.appendChild(screen);
+  }
+
+  private renderState(state: GameStateName): void {
+    if (state !== "mainMenu") return; // M1 only drives the menu screen here
+    this.teardownSession();
+    this.mount.innerHTML = "";
+    const screen = this.screen("TableRace");
+
+    const sub = document.createElement("p");
+    sub.className = "screen-state";
+    sub.textContent = "M1 — physics demo";
+    screen.appendChild(sub);
+
+    screen.appendChild(
+      this.button("Physics Demo (M1)", () => this.startDemo()),
+    );
+    this.mount.appendChild(screen);
+  }
+
+  // ---- M1 physics demo ---------------------------------------------------
+
+  private startDemo(): void {
+    if (!this.rapier) return;
+    this.mount.innerHTML = "";
+
+    this.sim = new Simulation(this.rapier);
+    this.renderer = new WorldRenderer(this.mount);
+    this.loop = new GameLoop(this.sim, this.renderer);
+    this.loop.start();
+
+    // Back overlay (absolute) to return to the menu.
+    const back = this.button("← Back", () => this.fsm.transition("mainMenu"));
+    back.style.position = "fixed";
+    back.style.top = "12px";
+    back.style.left = "12px";
+    back.style.zIndex = "10";
+    this.mount.appendChild(back);
+  }
+
+  private teardownSession(): void {
+    this.loop?.stop();
+    this.renderer?.dispose();
+    this.sim?.dispose();
+    this.loop = null;
+    this.renderer = null;
+    this.sim = null;
+  }
+
+  // ---- DOM helpers -------------------------------------------------------
+
+  private screen(titleText: string): HTMLDivElement {
     const screen = document.createElement("div");
     screen.className = "screen";
-
     const title = document.createElement("h1");
-    title.textContent = "TableRace";
+    title.textContent = titleText;
     screen.appendChild(title);
-
-    const subtitle = document.createElement("p");
-    subtitle.className = "screen-state";
-    subtitle.textContent = `state: ${state}`;
-    screen.appendChild(subtitle);
-
-    // Placeholder navigation to exercise the FSM until real screens land.
-    if (state === "mainMenu") {
-      screen.appendChild(
-        this.button("Play (Lobby)", () => this.fsm.transition("lobby")),
-      );
-    } else {
-      screen.appendChild(
-        this.button("Back to Menu", () => this.fsm.transition("mainMenu")),
-      );
-    }
-
-    this.mount.appendChild(screen);
+    return screen;
   }
 
   private button(label: string, onClick: () => void): HTMLButtonElement {
