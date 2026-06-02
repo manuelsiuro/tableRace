@@ -13,6 +13,8 @@ import { BALANCED, type CarStats } from "./car/CarStats";
 import { surfaceAt, type TrackDef } from "./track/TrackDef";
 import { SURFACE_TABLE } from "./track/SurfaceTable";
 import type { RaceContext, RaceMode } from "./rules/RaceMode";
+import { progressAlong } from "./rules/progress";
+import { AiDriver, type AiDifficulty, type AiView } from "./ai/AiDriver";
 import { NEUTRAL_INPUT, type InputAction } from "../shared/inputAction";
 import type {
   CameraSnapshot,
@@ -26,6 +28,10 @@ export interface CarConfig {
   stats: CarStats;
   /** Explicit spawn; if omitted, the track's spawn (by index) or a fallback. */
   spawn?: CarSpawn;
+  /** Controlled by an AI driver instead of an external InputAction. */
+  ai?: boolean;
+  /** Optional AI tuning when `ai` is true. */
+  difficulty?: AiDifficulty;
 }
 
 export interface SimulationOptions {
@@ -42,6 +48,8 @@ export class Simulation {
   private readonly track: TrackDef | null;
   private readonly mode: RaceMode | null;
   private readonly alive: boolean[] = [];
+  /** One slot per car; non-null entries are AI-controlled. */
+  private readonly aiDrivers: (AiDriver | null)[] = [];
   private currentTick = 0;
 
   constructor(rapier: Rapier, options: SimulationOptions = {}) {
@@ -63,7 +71,49 @@ export class Simulation {
         ),
       );
       this.alive.push(true);
+      this.aiDrivers.push(cfg.ai ? new AiDriver(cfg.difficulty) : null);
     });
+  }
+
+  /** Compute InputActions for AI-controlled cars (indexed by car id). */
+  private computeAiInputs(): (InputAction | null)[] {
+    const inputs: (InputAction | null)[] = this.cars.map(() => null);
+    if (!this.aiDrivers.some((d) => d)) return inputs;
+
+    const wps = this.track?.waypoints ?? [];
+    const views: AiView[] = this.cars.map((c) => {
+      const t = c.body.translation();
+      const v = c.body.linvel();
+      return {
+        id: c.id,
+        x: t.x,
+        z: t.z,
+        yaw: c.yaw,
+        speed: Math.hypot(v.x, v.z),
+      };
+    });
+
+    // Rank alive cars by track progress (leader = rank 0) for rubber-banding.
+    const aliveIds = this.cars.map((_, i) => i).filter((i) => this.alive[i]);
+    const progressOf = (i: number) =>
+      wps.length >= 2 ? progressAlong(wps, views[i].x, views[i].z) : views[i].z;
+    const ordered = [...aliveIds].sort((a, b) => progressOf(b) - progressOf(a));
+    const rankOf = new Map<number, number>();
+    ordered.forEach((id, idx) => rankOf.set(id, idx));
+    const denom = Math.max(1, aliveIds.length - 1);
+
+    for (let i = 0; i < this.cars.length; i++) {
+      const driver = this.aiDrivers[i];
+      if (!driver || !this.alive[i]) continue;
+      const others = views.filter((_, j) => j !== i && this.alive[j]);
+      inputs[i] = driver.update({
+        self: views[i],
+        waypoints: wps,
+        others,
+        rankFactor: (rankOf.get(i) ?? 0) / denom,
+      });
+    }
+    return inputs;
   }
 
   private spawnFor(i: number, explicit?: CarSpawn): CarSpawn {
@@ -112,14 +162,16 @@ export class Simulation {
 
   /** Advance one fixed step. Inputs are indexed by car id; missing = neutral. */
   step(inputs: InputAction[]): Snapshot {
+    const aiInputs = this.computeAiInputs();
     for (let i = 0; i < this.cars.length; i++) {
       if (!this.alive[i]) continue; // eliminated cars sit out the round
       const car = this.cars[i];
+      const input = aiInputs[i] ?? inputs[i] ?? NEUTRAL_INPUT;
       const pos = car.body.translation();
       const surface = this.track
         ? SURFACE_TABLE[surfaceAt(this.track, pos.x, pos.z)]
         : SURFACE_TABLE.tarmac;
-      car.update(inputs[i] ?? NEUTRAL_INPUT, STEP_S, surface);
+      car.update(input, STEP_S, surface);
     }
     this.physics.step();
     if (this.mode) this.mode.step(this.raceContext(), STEP_S);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { progressAlong } from "./progress";
+import { progressAlong, pointAtProgress, pathLength } from "./progress";
 import type { Vec3 } from "../../shared/math";
 
 const square: Vec3[] = [
@@ -33,5 +33,35 @@ describe("progressAlong", () => {
 
   it("returns 0 for degenerate paths", () => {
     expect(progressAlong([{ x: 0, y: 0, z: 0 }], 5, 5)).toBe(0);
+  });
+});
+
+describe("pathLength / pointAtProgress", () => {
+  it("measures the closed-loop perimeter", () => {
+    expect(pathLength(square)).toBeCloseTo(40); // 4 sides of 10
+  });
+
+  it("samples the start at progress 0", () => {
+    const p = pointAtProgress(square, 0);
+    expect(p.x).toBeCloseTo(0);
+    expect(p.z).toBeCloseTo(0);
+  });
+
+  it("samples a point partway along a segment", () => {
+    const p = pointAtProgress(square, 4);
+    expect(p.x).toBeCloseTo(4);
+    expect(p.z).toBeCloseTo(0);
+  });
+
+  it("wraps around the loop", () => {
+    const once = pointAtProgress(square, 4);
+    const wrapped = pointAtProgress(square, 44); // 40 + 4
+    expect(wrapped.x).toBeCloseTo(once.x);
+    expect(wrapped.z).toBeCloseTo(once.z);
+  });
+
+  it("round-trips with progressAlong", () => {
+    const p = pointAtProgress(square, 15);
+    expect(progressAlong(square, p.x, p.z)).toBeCloseTo(15, 4);
   });
 });

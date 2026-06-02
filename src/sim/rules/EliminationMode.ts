@@ -8,7 +8,7 @@
 // Pure (no Rapier): fully unit-testable via a faked RaceContext.
 
 import type { RacePhase, RaceSnapshot } from "../../shared/snapshot";
-import { progressAlong } from "./progress";
+import { pathLength, progressAlong } from "./progress";
 import type { CameraState, RaceContext, RaceCar, RaceMode } from "./RaceMode";
 
 export interface EliminationConfig {
@@ -36,6 +36,11 @@ export class EliminationMode implements RaceMode {
   private readonly cfg: EliminationConfig;
   private readonly scores: number[];
   private readonly grace: number[];
+  // Lap-aware "distance travelled" per car (NOT raw progress, which wraps at the
+  // lap line and would crown a car idling just before the finish as the leader).
+  private readonly travelled: number[];
+  private readonly lastRaw: number[];
+  private progressInit = false;
   private round = 0;
   private phase: RacePhase = "racing";
   private leaderId = 0;
@@ -46,6 +51,8 @@ export class EliminationMode implements RaceMode {
     this.cfg = { ...DEFAULT_ELIMINATION, ...cfg };
     this.scores = new Array(carCount).fill(0);
     this.grace = new Array(carCount).fill(0);
+    this.travelled = new Array(carCount).fill(0);
+    this.lastRaw = new Array(carCount).fill(0);
     this.camera = { x: 0, z: 0, zoom: this.cfg.zoom };
   }
 
@@ -58,6 +65,7 @@ export class EliminationMode implements RaceMode {
         ctx.respawnAll();
         this.round++;
         this.grace.fill(0);
+        this.resetProgress(ctx);
         this.phase = "racing";
       }
       this.updateCamera(ctx);
@@ -65,6 +73,11 @@ export class EliminationMode implements RaceMode {
     }
 
     // --- racing ---
+    if (!this.progressInit) {
+      this.resetProgress(ctx);
+      this.progressInit = true;
+    }
+    this.updateProgress(ctx);
     this.leaderId = this.computeLeader(ctx);
     const leader = ctx.cars[this.leaderId];
 
@@ -120,17 +133,48 @@ export class EliminationMode implements RaceMode {
     if (leader) this.camera = { x: leader.x, z: leader.z, zoom: this.cfg.zoom };
   }
 
-  /** Leader = alive car furthest along the track (or furthest +Z without a track). */
-  private computeLeader(ctx: RaceContext): number {
+  /** Raw progress along the path, or +Z when there is no track (tests). */
+  private rawProgress(ctx: RaceContext, car: RaceCar): number {
     const wps = ctx.track?.waypoints;
+    return wps && wps.length >= 2 ? progressAlong(wps, car.x, car.z) : car.z;
+  }
+
+  /** Baseline the per-car distance-travelled accumulators to current positions. */
+  private resetProgress(ctx: RaceContext): void {
+    for (const car of ctx.cars) {
+      this.lastRaw[car.id] = this.rawProgress(ctx, car);
+      this.travelled[car.id] = 0;
+    }
+  }
+
+  /** Accumulate forward distance, unwrapping the lap-line discontinuity. */
+  private updateProgress(ctx: RaceContext): void {
+    const wps = ctx.track?.waypoints;
+    if (!wps || wps.length < 2) {
+      // No track: use absolute +Z directly as the standing.
+      for (const car of ctx.cars) this.travelled[car.id] = car.z;
+      return;
+    }
+    const total = pathLength(wps);
+    for (const car of ctx.cars) {
+      const raw = this.rawProgress(ctx, car);
+      let delta = raw - this.lastRaw[car.id];
+      if (delta > total / 2)
+        delta -= total; // wrapped backward
+      else if (delta < -total / 2) delta += total; // crossed the lap line
+      this.travelled[car.id] += delta;
+      this.lastRaw[car.id] = raw;
+    }
+  }
+
+  /** Leader = alive car that has travelled the furthest (lap-aware). */
+  private computeLeader(ctx: RaceContext): number {
     let bestId = this.leaderId;
     let best = -Infinity;
     for (const car of ctx.cars) {
       if (!car.alive) continue;
-      const p =
-        wps && wps.length >= 2 ? progressAlong(wps, car.x, car.z) : car.z;
-      if (p > best) {
-        best = p;
+      if (this.travelled[car.id] > best) {
+        best = this.travelled[car.id];
         bestId = car.id;
       }
     }

@@ -11,9 +11,8 @@ import {
 import { initRapier, type Rapier } from "../sim/physics/RapierInit";
 import { Simulation } from "../sim/Simulation";
 import { createProceduralTrack } from "../sim/track/proceduralTrack";
-import { BALANCED } from "../sim/car/CarStats";
+import { BALANCED, SPEEDSTER, GRIPPER, HEAVY } from "../sim/car/CarStats";
 import { EliminationMode } from "../sim/rules/EliminationMode";
-import { NEUTRAL_INPUT } from "../shared/inputAction";
 import type { Snapshot } from "../shared/snapshot";
 import { WorldRenderer } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
@@ -62,28 +61,34 @@ export class Game {
 
     const sub = document.createElement("p");
     sub.className = "screen-state";
-    sub.textContent = "M4 — elimination: outrun the CPU off the screen";
+    sub.textContent = "M5 — elimination vs AI bots";
     screen.appendChild(sub);
 
     screen.appendChild(
-      this.button("Elimination (M4)", () => this.startElimination()),
+      this.button("Race the bots (M5)", () => this.startElimination()),
     );
     screen.appendChild(this.button("Free drive (M3)", () => this.startDrive()));
     this.mount.appendChild(screen);
   }
 
-  // ---- M4 elimination session --------------------------------------------
+  // ---- M5 elimination vs AI bots -----------------------------------------
 
   private startElimination(): void {
     if (!this.rapier) return;
     this.mount.innerHTML = "";
 
     const track = createProceduralTrack();
-    const mode = new EliminationMode(2, { pointsToWin: 3 });
+    const mode = new EliminationMode(4, { pointsToWin: 3 });
     this.sim = new Simulation(this.rapier, {
       track,
       mode,
-      cars: [{ stats: BALANCED }, { stats: BALANCED }],
+      // car 0 = player; cars 1-3 = AI bots with different stats.
+      cars: [
+        { stats: BALANCED },
+        { stats: SPEEDSTER, ai: true },
+        { stats: GRIPPER, ai: true },
+        { stats: HEAVY, ai: true },
+      ],
     });
     this.renderer = new WorldRenderer(this.mount, { cameraMode: "shared" });
     this.renderer.setTrack(track);
@@ -91,18 +96,17 @@ export class Game {
     const input = this.input;
 
     const hud = this.makeHud();
-    // car 0 = player; car 1 = idle CPU (falls behind → eliminated → you score).
     this.loop = new GameLoop(
       this.sim,
       this.renderer,
-      () => [input.sample(), NEUTRAL_INPUT],
+      () => [input.sample()],
       (snap) => this.updateHud(hud, snap),
     );
     this.loop.start();
 
     this.addBackButton();
     this.addHint(
-      "Drive away — leave the red CPU car off-screen to score the round",
+      "Keep up with the bots — don't fall off the back of the screen",
     );
   }
 
@@ -126,13 +130,17 @@ export class Game {
   private updateHud(hud: HTMLDivElement, snap: Snapshot): void {
     const { round, phase, scores, leaderId } = snap.race;
     const you = scores[0] ?? 0;
-    const cpu = scores[1] ?? 0;
+    const best = Math.max(...scores);
+    const racing = snap.cars.filter((c) => c.alive).length;
     if (phase === "finished") {
-      hud.textContent = leaderId === 0 ? "🏆 YOU WIN" : "CPU WINS";
+      hud.textContent = leaderId === 0 ? "🏆 YOU WIN" : `CPU ${leaderId} WINS`;
     } else if (phase === "roundEnd") {
-      hud.textContent = `ROUND OVER — YOU ${you} : ${cpu} CPU`;
+      hud.textContent = `ROUND OVER — your points: ${you} (best ${best})`;
     } else {
-      hud.textContent = `ROUND ${round + 1} · YOU ${you} : ${cpu} CPU`;
+      const youAlive = snap.cars[0]?.alive ?? false;
+      hud.textContent = youAlive
+        ? `ROUND ${round + 1} · your points: ${you} · ${racing} still racing`
+        : `ELIMINATED — your points: ${you} · ${racing} still racing`;
     }
   }
 
