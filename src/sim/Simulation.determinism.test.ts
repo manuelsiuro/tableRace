@@ -33,13 +33,29 @@ describe("Simulation determinism", () => {
     b.dispose();
   });
 
-  it("advances the falling box downward under gravity", () => {
+  it("drives the car forward (+Z) under throttle", () => {
     const sim = new Simulation(rapier);
-    const startY = sim.snapshot().cars[0].y;
-    for (let i = 0; i < 30; i++) sim.step([NEUTRAL_INPUT]);
-    const endY = sim.snapshot().cars[0].y;
-    expect(endY).toBeLessThan(startY);
+    const startZ = sim.snapshot().cars[0].z;
+    const throttle = { ...NEUTRAL_INPUT, throttle: 1 };
+    for (let i = 0; i < 60; i++) sim.step([throttle]);
+    const endZ = sim.snapshot().cars[0].z;
+    expect(endZ).toBeGreaterThan(startZ + 1);
     sim.dispose();
+  });
+
+  it("identical with non-trivial steering+throttle inputs", () => {
+    const a = new Simulation(rapier);
+    const b = new Simulation(rapier);
+    const drive = { ...NEUTRAL_INPUT, throttle: 1, steer: 0.6 };
+    let lastA = a.snapshot();
+    let lastB = b.snapshot();
+    for (let i = 0; i < 90; i++) {
+      lastA = a.step([drive]);
+      lastB = b.step([drive]);
+    }
+    expect(lastA).toEqual(lastB);
+    a.dispose();
+    b.dispose();
   });
 
   it("derives a deterministic timeline from the tick, not the wall clock", () => {

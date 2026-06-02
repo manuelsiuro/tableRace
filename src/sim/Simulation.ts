@@ -1,52 +1,56 @@
 // THE seam. The authoritative simulation advances purely from InputAction[] (one
-// per car) plus its own prior state, and returns a plain-data Snapshot. No
-// rendering, no DOM, no wall-clock — so the identical instance runs in the
-// browser (single-player) and on the Node host (multiplayer), and a recorded
-// input script replays bit-for-bit (see Simulation.determinism.test.ts).
+// per car, indexed by car id) plus its own prior state, and returns a plain-data
+// Snapshot. No rendering, no DOM, no wall-clock — so the identical instance runs
+// in the browser (single-player) and on the Node host (multiplayer), and a
+// recorded input script replays bit-for-bit (Simulation.determinism.test.ts).
 //
-// M1 scope: a single dynamic box falling onto a static floor, exposed as "car 0"
-// so the renderer can draw it through the same generic path real cars will use.
+// M2 scope: drivable cars (arcade drift) on a flat ground plane.
 
-import type RAPIER from "@dimforge/rapier3d-compat";
 import type { Rapier } from "./physics/RapierInit";
 import { PhysicsWorld } from "./physics/PhysicsWorld";
-import type { InputAction } from "../shared/inputAction";
+import { CarController, type CarSpawn } from "./car/CarController";
+import { BALANCED, type CarStats } from "./car/CarStats";
+import { NEUTRAL_INPUT, type InputAction } from "../shared/inputAction";
 import type { CarSnapshot, Snapshot } from "../shared/snapshot";
-import { STEP_MS } from "../shared/protocol";
+import { STEP_MS, STEP_S } from "../shared/protocol";
+
+export interface CarConfig extends CarSpawn {
+  stats: CarStats;
+}
 
 export interface SimulationOptions {
   gravityY?: number;
-}
-
-interface TrackedBody {
-  id: number;
-  body: RAPIER.RigidBody;
+  cars?: CarConfig[];
 }
 
 export class Simulation {
   private readonly physics: PhysicsWorld;
-  private readonly bodies: TrackedBody[] = [];
+  private readonly cars: CarController[] = [];
   private currentTick = 0;
 
   constructor(rapier: Rapier, options: SimulationOptions = {}) {
     this.physics = new PhysicsWorld(rapier, options.gravityY ?? -22);
     this.physics.createGround();
-    // M1 demo: a box dropped from height with a slight initial spin source
-    // (offset center of mass via spawn height only — kept fully deterministic).
-    const box = this.physics.createDynamicBox(
-      { x: 0, y: 8, z: 0 },
-      { x: 0.6, y: 0.6, z: 1.0 },
+
+    const configs = options.cars ?? [{ x: 0, z: 0, yaw: 0, stats: BALANCED }];
+    configs.forEach((cfg, i) =>
+      this.cars.push(new CarController(this.physics, i, cfg.stats, cfg)),
     );
-    box.setAngvel({ x: 0.5, y: 0, z: 0.8 }, true);
-    this.bodies.push({ id: 0, body: box });
   }
 
   get tick(): number {
     return this.currentTick;
   }
 
-  /** Advance one fixed step. `_inputs` is unused in M1 (no car control yet). */
-  step(_inputs: InputAction[]): Snapshot {
+  get carCount(): number {
+    return this.cars.length;
+  }
+
+  /** Advance one fixed step. Inputs are indexed by car id; missing = neutral. */
+  step(inputs: InputAction[]): Snapshot {
+    for (let i = 0; i < this.cars.length; i++) {
+      this.cars[i].update(inputs[i] ?? NEUTRAL_INPUT, STEP_S);
+    }
     this.physics.step();
     this.currentTick++;
     return this.snapshot();
@@ -54,12 +58,12 @@ export class Simulation {
 
   /** Current world state without advancing — used to seed the render loop. */
   snapshot(): Snapshot {
-    const cars: CarSnapshot[] = this.bodies.map(({ id, body }) => {
-      const t = body.translation();
-      const r = body.rotation();
-      const v = body.linvel();
+    const cars: CarSnapshot[] = this.cars.map((car) => {
+      const t = car.body.translation();
+      const r = car.body.rotation();
+      const v = car.body.linvel();
       return {
-        id,
+        id: car.id,
         x: t.x,
         y: t.y,
         z: t.z,
@@ -80,7 +84,12 @@ export class Simulation {
       serverTimeMs: this.currentTick * STEP_MS,
       cars,
       camera: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, zoom: 10 },
-      race: { round: 0, phase: "racing", scores: [0], leaderId: 0 },
+      race: {
+        round: 0,
+        phase: "racing",
+        scores: cars.map(() => 0),
+        leaderId: 0,
+      },
       projectiles: [],
     };
   }

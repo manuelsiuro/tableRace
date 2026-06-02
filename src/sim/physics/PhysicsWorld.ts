@@ -50,6 +50,50 @@ export class PhysicsWorld {
     return body;
   }
 
+  /**
+   * A car chassis: a dynamic box with rotations LOCKED — the arcade controller
+   * owns heading by setting the body's yaw directly, so the physics solver never
+   * tumbles the car. Translation + collision response stay fully physical.
+   */
+  createCarBody(position: Vec3, halfExtents: Vec3): RAPIER.RigidBody {
+    const body = this.world.createRigidBody(
+      this.rapier.RigidBodyDesc.dynamic()
+        .setTranslation(position.x, position.y, position.z)
+        .lockRotations()
+        .setLinearDamping(0.05),
+    );
+    this.world.createCollider(
+      this.rapier.ColliderDesc.cuboid(
+        halfExtents.x,
+        halfExtents.y,
+        halfExtents.z,
+      )
+        .setRestitution(0.2)
+        .setFriction(0.7),
+      body,
+    );
+    return body;
+  }
+
+  /** Down-ray ground probe, excluding the body itself. */
+  isGrounded(body: RAPIER.RigidBody, rayLength: number): boolean {
+    const t = body.translation();
+    const ray = new this.rapier.Ray(
+      { x: t.x, y: t.y, z: t.z },
+      { x: 0, y: -1, z: 0 },
+    );
+    const hit = this.world.castRay(
+      ray,
+      rayLength,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      body,
+    );
+    return hit !== null;
+  }
+
   step(): void {
     this.world.step();
   }
