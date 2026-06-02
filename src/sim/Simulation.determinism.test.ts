@@ -6,6 +6,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initRapier, type Rapier } from "./physics/RapierInit";
 import { Simulation } from "./Simulation";
+import { createProceduralTrack } from "./track/proceduralTrack";
+import { BALANCED } from "./car/CarStats";
 import { NEUTRAL_INPUT } from "../shared/inputAction";
 
 let rapier: Rapier;
@@ -50,6 +52,23 @@ describe("Simulation determinism", () => {
     let lastA = a.snapshot();
     let lastB = b.snapshot();
     for (let i = 0; i < 90; i++) {
+      lastA = a.step([drive]);
+      lastB = b.step([drive]);
+    }
+    expect(lastA).toEqual(lastB);
+    a.dispose();
+    b.dispose();
+  });
+
+  it("stays identical on a full track (walls, ramp, surfaces) with steering", () => {
+    const track = createProceduralTrack();
+    const cars = [{ stats: BALANCED }];
+    const a = new Simulation(rapier, { track, cars });
+    const b = new Simulation(rapier, { track, cars });
+    const drive = { ...NEUTRAL_INPUT, throttle: 1, steer: 0.4 };
+    let lastA = a.snapshot();
+    let lastB = b.snapshot();
+    for (let i = 0; i < 120; i++) {
       lastA = a.step([drive]);
       lastB = b.step([drive]);
     }

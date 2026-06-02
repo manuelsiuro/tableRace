@@ -14,6 +14,7 @@
 import { clamp, lerp, moveTowards } from "../../shared/math";
 import type { InputAction } from "../../shared/inputAction";
 import type { CarStats } from "./CarStats";
+import { NEUTRAL_SURFACE, type SurfaceModifier } from "../track/SurfaceTable";
 
 export interface DriftInput {
   /** Horizontal world velocity. */
@@ -25,6 +26,8 @@ export interface DriftInput {
   stats: CarStats;
   grounded: boolean;
   dt: number;
+  /** Surface handling multipliers (grass/ice/…); defaults to tarmac. */
+  surface?: SurfaceModifier;
 }
 
 export interface DriftOutput {
@@ -44,6 +47,7 @@ export function driftStep({
   stats,
   grounded,
   dt,
+  surface = NEUTRAL_SURFACE,
 }: DriftInput): DriftOutput {
   const sin = Math.sin(yaw);
   const cos = Math.cos(yaw);
@@ -54,29 +58,35 @@ export function driftStep({
 
   const ctrl = grounded ? 1 : stats.airControlFactor;
 
+  // Surface-adjusted effective stats (grass slows, ice removes grip, …).
+  const accel = stats.accel * surface.accelMul;
+  const maxSpeed = stats.maxSpeed * surface.maxSpeedMul;
+  const gripLateral = stats.gripLateral * surface.gripMul;
+  const driftLateral = stats.driftLateral * surface.gripMul;
+
   // --- Longitudinal: throttle / brake / drag -------------------------------
   if (input.throttle > 0) {
-    vForward += stats.accel * input.throttle * ctrl * dt;
+    vForward += accel * input.throttle * ctrl * dt;
   }
   if (input.brake > 0) {
     if (vForward > 0) {
       vForward = Math.max(0, vForward - stats.brakeDecel * input.brake * dt);
     } else {
       // Already stopped or reversing — brake becomes reverse throttle.
-      vForward -= stats.accel * input.brake * ctrl * dt;
+      vForward -= accel * input.brake * ctrl * dt;
     }
   }
   if (input.throttle === 0 && input.brake === 0) {
     vForward = moveTowards(vForward, 0, stats.dragDecel * dt);
   }
-  vForward = clamp(vForward, -stats.reverseMaxSpeed, stats.maxSpeed);
+  vForward = clamp(vForward, -stats.reverseMaxSpeed, maxSpeed);
 
   // --- Lateral: grip vs drift ----------------------------------------------
   const preSpeed = Math.hypot(vForward, vLateral);
   const wantDrift =
     Math.abs(input.steer) > stats.steerDriftThresh || input.handbrake;
   const drifting = grounded && preSpeed > stats.driftSpeedThresh && wantDrift;
-  let lateralFriction = drifting ? stats.driftLateral : stats.gripLateral;
+  let lateralFriction = drifting ? driftLateral : gripLateral;
   if (!grounded) lateralFriction *= stats.airControlFactor;
   vLateral = moveTowards(vLateral, 0, lateralFriction * dt);
 
@@ -85,7 +95,7 @@ export function driftStep({
   const speedFactor = lerp(
     1,
     stats.highSpeedSteerFactor,
-    clamp(Math.abs(vForward) / stats.maxSpeed, 0, 1),
+    clamp(Math.abs(vForward) / maxSpeed, 0, 1),
   );
   const authority = clamp(Math.abs(vForward) / stats.turnFullSpeed, 0, 1);
   const dir = vForward >= 0 ? 1 : -1;

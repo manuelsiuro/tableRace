@@ -91,6 +91,27 @@ describe("DriftModel drift", () => {
   });
 });
 
+describe("DriftModel surfaces", () => {
+  it("ice retains far more lateral slip than tarmac", () => {
+    const base = { vx: 10, vz: 0, yaw: 0 };
+    const tarmac = step({ ...base });
+    const ice = step({
+      ...base,
+      surface: { gripMul: 0.15, accelMul: 1, maxSpeedMul: 1 },
+    });
+    expect(Math.abs(ice.vx)).toBeGreaterThan(Math.abs(tarmac.vx));
+  });
+
+  it("grass reduces acceleration", () => {
+    const tarmac = step({ input: { throttle: 1 } });
+    const grass = step({
+      input: { throttle: 1 },
+      surface: { gripMul: 0.5, accelMul: 0.7, maxSpeedMul: 0.7 },
+    });
+    expect(grass.vz).toBeLessThan(tarmac.vz);
+  });
+});
+
 describe("DriftModel airborne", () => {
   it("reduces throttle effect while airborne", () => {
     const grounded = step({ input: { throttle: 1 }, grounded: true });

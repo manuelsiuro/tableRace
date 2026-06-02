@@ -9,6 +9,7 @@ import { driftStep } from "./DriftModel";
 import type { CarStats } from "./CarStats";
 import type { InputAction } from "../../shared/inputAction";
 import { quatFromYaw } from "../../shared/math";
+import { NEUTRAL_SURFACE, type SurfaceModifier } from "../track/SurfaceTable";
 
 export interface CarSpawn {
   x: number;
@@ -48,8 +49,13 @@ export class CarController {
     this.groundRayLength = stats.halfExtents.y + 0.25;
   }
 
-  update(input: InputAction, dt: number): void {
-    const grounded = this.physics.isGrounded(this.body, this.groundRayLength);
+  update(
+    input: InputAction,
+    dt: number,
+    surface: SurfaceModifier = NEUTRAL_SURFACE,
+  ): void {
+    const probe = this.physics.groundProbe(this.body, this.groundRayLength);
+    const grounded = probe !== null;
     const lin = this.body.linvel();
 
     const out = driftStep({
@@ -60,9 +66,25 @@ export class CarController {
       stats: this.stats,
       grounded,
       dt,
+      surface,
     });
 
-    this.body.setLinvel({ x: out.vx, y: lin.y, z: out.vz }, true);
+    if (probe) {
+      // Project the desired horizontal velocity onto the ground plane so the
+      // car climbs ramps (gaining a vertical component) instead of ramming the
+      // slope. At the ramp's edge the ground vanishes and this upward velocity
+      // becomes the jump.
+      const n = probe.normal;
+      const dot = out.vx * n.x + out.vz * n.z; // desired horizontal has y = 0
+      this.body.setLinvel(
+        { x: out.vx - dot * n.x, y: -dot * n.y, z: out.vz - dot * n.z },
+        true,
+      );
+    } else {
+      // Airborne: keep gravity-driven vertical velocity, steer/throttle muted.
+      this.body.setLinvel({ x: out.vx, y: lin.y, z: out.vz }, true);
+    }
+
     this.yaw = out.yaw;
     this.body.setRotation(quatFromYaw(out.yaw), true);
     this.drifting = out.drifting;

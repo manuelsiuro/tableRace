@@ -7,7 +7,9 @@
 import {
   AmbientLight,
   BoxGeometry,
+  BufferGeometry,
   DirectionalLight,
+  Float32BufferAttribute,
   GridHelper,
   Mesh,
   MeshStandardMaterial,
@@ -18,12 +20,21 @@ import {
   WebGLRenderer,
 } from "three";
 import type { Snapshot } from "../shared/snapshot";
+import type { SurfaceId, TrackDef } from "../sim/track/TrackDef";
 import { interpolateCar } from "./Interpolator";
 
 const CAR_COLORS = [
   0x3b82f6, 0xef4444, 0x22c55e, 0xf59e0b, 0xa855f7, 0x14b8a6, 0xec4899,
   0x84cc16,
 ];
+
+const SURFACE_COLORS: Record<SurfaceId, number> = {
+  tarmac: 0x444444,
+  grass: 0x3f7d3a,
+  ice: 0x9fd8ef,
+  sand: 0xd9c089,
+  oil: 0x141414,
+};
 
 export class WorldRenderer {
   private readonly parent: HTMLElement;
@@ -92,6 +103,66 @@ export class WorldRenderer {
 
     this.updateCamera(prev, cur, alpha);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Build static visuals (walls, ramp, surface patches) from a TrackDef. */
+  setTrack(track: TrackDef): void {
+    for (const c of track.colliders) {
+      if (c.kind === "box") {
+        const geo = new BoxGeometry(
+          c.halfExtents.x * 2,
+          c.halfExtents.y * 2,
+          c.halfExtents.z * 2,
+        );
+        const mat = new MeshStandardMaterial({
+          color: 0x8a8f98,
+          roughness: 0.9,
+        });
+        const mesh = new Mesh(geo, mat);
+        mesh.position.set(c.position.x, c.position.y, c.position.z);
+        if (c.rotation)
+          mesh.quaternion.set(
+            c.rotation.x,
+            c.rotation.y,
+            c.rotation.z,
+            c.rotation.w,
+          );
+        this.scene.add(mesh);
+        this.disposables.push(geo, mat);
+      } else {
+        const geo = new BufferGeometry();
+        geo.setAttribute("position", new Float32BufferAttribute(c.vertices, 3));
+        geo.setIndex(c.indices);
+        geo.computeVertexNormals();
+        const mat = new MeshStandardMaterial({
+          color: 0xb45309,
+          roughness: 0.8,
+        });
+        this.scene.add(new Mesh(geo, mat));
+        this.disposables.push(geo, mat);
+      }
+    }
+
+    for (const zone of track.surfaceZones) {
+      const w = zone.area.maxX - zone.area.minX;
+      const d = zone.area.maxZ - zone.area.minZ;
+      const geo = new PlaneGeometry(w, d);
+      const mat = new MeshStandardMaterial({
+        color: SURFACE_COLORS[zone.surface],
+        roughness: 1,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const mesh = new Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(
+        (zone.area.minX + zone.area.maxX) / 2,
+        0.02,
+        (zone.area.minZ + zone.area.maxZ) / 2,
+      );
+      this.scene.add(mesh);
+      this.disposables.push(geo, mat);
+    }
   }
 
   /** Simple follow of car 0 (placeholder until the M4 shared leader camera). */

@@ -10,6 +10,8 @@ import {
 } from "../state/GameStateMachine";
 import { initRapier, type Rapier } from "../sim/physics/RapierInit";
 import { Simulation } from "../sim/Simulation";
+import { createProceduralTrack } from "../sim/track/proceduralTrack";
+import { BALANCED } from "../sim/car/CarStats";
 import { WorldRenderer } from "../render/WorldRenderer";
 import { InputManager } from "../input/InputManager";
 import { GameLoop } from "./GameLoop";
@@ -57,10 +59,12 @@ export class Game {
 
     const sub = document.createElement("p");
     sub.className = "screen-state";
-    sub.textContent = "M2 — free drive";
+    sub.textContent = "M3 — track: walls, ramp, ice & grass";
     screen.appendChild(sub);
 
-    screen.appendChild(this.button("Drive (M2)", () => this.startDrive()));
+    screen.appendChild(
+      this.button("Drive the track (M3)", () => this.startDrive()),
+    );
     this.mount.appendChild(screen);
   }
 
@@ -70,8 +74,13 @@ export class Game {
     if (!this.rapier) return;
     this.mount.innerHTML = "";
 
-    this.sim = new Simulation(this.rapier);
+    const track = createProceduralTrack();
+    this.sim = new Simulation(this.rapier, {
+      track,
+      cars: [{ stats: BALANCED }],
+    });
     this.renderer = new WorldRenderer(this.mount);
+    this.renderer.setTrack(track);
     this.input = new InputManager();
     const input = this.input;
     this.loop = new GameLoop(this.sim, this.renderer, () => [input.sample()]);
@@ -86,7 +95,8 @@ export class Game {
 
     const hint = document.createElement("p");
     hint.className = "screen-state";
-    hint.textContent = "WASD / Arrows to drive · Space to drift";
+    hint.textContent =
+      "WASD / Arrows to drive · Space to drift · drive +forward up the ramp";
     hint.style.position = "fixed";
     hint.style.bottom = "12px";
     hint.style.left = "50%";

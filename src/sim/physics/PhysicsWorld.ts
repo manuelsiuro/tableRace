@@ -5,7 +5,7 @@
 
 import type RAPIER from "@dimforge/rapier3d-compat";
 import type { Rapier } from "./RapierInit";
-import type { Vec3 } from "../../shared/math";
+import type { Quat, Vec3 } from "../../shared/math";
 import { STEP_S } from "../../shared/protocol";
 
 export class PhysicsWorld {
@@ -62,27 +62,70 @@ export class PhysicsWorld {
         .lockRotations()
         .setLinearDamping(0.05),
     );
+    // Rounded cuboid: the radius lets the chassis ride over ramp/wall edges
+    // instead of snagging a flat corner on a slope (the car is rotation-locked).
+    const r = 0.15;
     this.world.createCollider(
-      this.rapier.ColliderDesc.cuboid(
-        halfExtents.x,
-        halfExtents.y,
-        halfExtents.z,
+      this.rapier.ColliderDesc.roundCuboid(
+        Math.max(0.05, halfExtents.x - r),
+        Math.max(0.05, halfExtents.y - r),
+        Math.max(0.05, halfExtents.z - r),
+        r,
       )
-        .setRestitution(0.2)
-        .setFriction(0.7),
+        .setRestitution(0.1)
+        .setFriction(0.6),
       body,
     );
     return body;
   }
 
-  /** Down-ray ground probe, excluding the body itself. */
-  isGrounded(body: RAPIER.RigidBody, rayLength: number): boolean {
+  /** Static box collider (walls, pillars, ramps-as-box). Optional rotation. */
+  createStaticBox(
+    position: Vec3,
+    halfExtents: Vec3,
+    rotation?: Quat,
+  ): RAPIER.Collider {
+    const desc = this.rapier.RigidBodyDesc.fixed().setTranslation(
+      position.x,
+      position.y,
+      position.z,
+    );
+    if (rotation) desc.setRotation(rotation);
+    const body = this.world.createRigidBody(desc);
+    return this.world.createCollider(
+      this.rapier.ColliderDesc.cuboid(
+        halfExtents.x,
+        halfExtents.y,
+        halfExtents.z,
+      ).setFriction(0.8),
+      body,
+    );
+  }
+
+  /** Static trimesh collider — the right shape for complex track geometry. */
+  createTrimesh(vertices: Float32Array, indices: Uint32Array): RAPIER.Collider {
+    const body = this.world.createRigidBody(this.rapier.RigidBodyDesc.fixed());
+    return this.world.createCollider(
+      this.rapier.ColliderDesc.trimesh(vertices, indices),
+      body,
+    );
+  }
+
+  /**
+   * Down-ray ground probe (excluding the body itself). Returns the contact
+   * surface normal when grounded, or null when airborne. The normal lets the
+   * car controller follow ramps instead of ramming into them.
+   */
+  groundProbe(
+    body: RAPIER.RigidBody,
+    rayLength: number,
+  ): { normal: Vec3 } | null {
     const t = body.translation();
     const ray = new this.rapier.Ray(
       { x: t.x, y: t.y, z: t.z },
       { x: 0, y: -1, z: 0 },
     );
-    const hit = this.world.castRay(
+    const hit = this.world.castRayAndGetNormal(
       ray,
       rayLength,
       true,
@@ -91,7 +134,9 @@ export class PhysicsWorld {
       undefined,
       body,
     );
-    return hit !== null;
+    if (!hit) return null;
+    const n = hit.normal;
+    return { normal: { x: n.x, y: n.y, z: n.z } };
   }
 
   step(): void {
